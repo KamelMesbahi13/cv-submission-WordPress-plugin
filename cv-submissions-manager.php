@@ -190,6 +190,7 @@ function cvsm_dashboard_page() {
         );
         
         if ($result) {
+            cvsm_trigger_cache_clear(); // Clear cache on new addition
             echo '<div class="notice notice-success"><p>Candidat ajouté avec succès!</p></div>';
         } else {
             echo '<div class="notice notice-error"><p>Erreur lors de l\'ajout: ' . $wpdb->last_error . '</p></div>';
@@ -465,12 +466,17 @@ function cvsm_dashboard_page() {
                             <td><input name="specialite" type="text" id="specialite" class="regular-text"></td>
                         </tr>
                         <tr>
-                            <th scope="row"><label for="experience">Expérience</label></th>
-                            <td><input name="experience" type="text" id="experience" class="regular-text" placeholder="Ex: 5 ans"></td>
+                            <th scope="row"><label for="experience">Expérience (Années)</label></th>
+                            <td><input name="experience" type="number" id="experience" class="regular-text" min="0" step="1"></td>
                         </tr>
                         <tr>
                             <th scope="row"><label for="profile_type">Type de Profil</label></th>
-                            <td><input name="profile_type" type="text" id="profile_type" class="regular-text" placeholder="Ex: sous-traitance"></td>
+                            <td>
+                                <select name="profile_type" id="profile_type" class="regular-text">
+                                    <option value="sous-traitance">sous-traitance</option>
+                                    <option value="pour recrutement">pour recrutement</option>
+                                </select>
+                            </td>
                         </tr>
                         <tr>
                             <th scope="row"><label for="cv_file">CV (PDF)</label></th>
@@ -538,6 +544,7 @@ function cvsm_accept_cv() {
     );
     
     if ($result !== false) {
+        cvsm_trigger_cache_clear();
         cvsm_log('CV accepted', array('id' => $id));
         wp_send_json_success(array(
             'message' => 'CV accepté avec succès',
@@ -576,6 +583,7 @@ function cvsm_reject_cv() {
     );
     
     if ($result !== false) {
+        cvsm_trigger_cache_clear();
         cvsm_log('CV rejected', array('id' => $id));
         wp_send_json_success(array('message' => 'CV rejeté'));
     } else {
@@ -606,6 +614,7 @@ function cvsm_delete_cv() {
     );
     
     if ($result !== false) {
+        cvsm_trigger_cache_clear();
         cvsm_log('CV deleted', array('id' => $id));
         wp_send_json_success(array('message' => 'CV supprimé définitivement'));
     } else {
@@ -1223,6 +1232,36 @@ function cvsm_add_test_data() {
 add_action('admin_init', 'cvsm_add_test_data');
 
 /**
+ * Helper to clear caches from common plugins
+ */
+function cvsm_trigger_cache_clear() {
+    // 1. WP Rocket
+    if (function_exists('rocket_clean_domain')) {
+        rocket_clean_domain();
+    }
+
+    // 2. W3 Total Cache
+    if (function_exists('w3tc_flush_all')) {
+        w3tc_flush_all();
+    }
+
+    // 3. WP Super Cache
+    if (function_exists('wp_cache_clear_cache')) {
+        wp_cache_clear_cache();
+    }
+
+    // 4. Autoptimize
+    if (class_exists('autoptimizeCache')) {
+        autoptimizeCache::clearall();
+    }
+
+    // 5. LiteSpeed Cache
+    if (defined('LSCWP_V')) {
+        do_action('litespeed_purge_all');
+    }
+}
+
+/**
  * Get standard lists for Domain and Wilaya
  */
 function cvsm_get_lists() {
@@ -1238,6 +1277,7 @@ function cvsm_get_lists() {
         'VRD'
     );
     
+    // Exact order as requested by user
     $wilayas = array(
         'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar', 
         'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger', 
@@ -1249,10 +1289,15 @@ function cvsm_get_lists() {
         'In Salah', 'In Guezzam', 'Touggourt', 'Djanet', 'El Meghaier', 'El Menia'
     );
     
-    sort($domaines);
-    sort($wilayas);
+    $profile_types = array(
+        'sous-traitance',
+        'pour recrutement'
+    );
     
-    return array('domaines' => $domaines, 'wilayas' => $wilayas);
+    sort($domaines);
+    // Removed sort($wilayas) to keep user's specific order
+    
+    return array('domaines' => $domaines, 'wilayas' => $wilayas, 'profile_types' => $profile_types);
 }
 
 /**
@@ -1267,9 +1312,7 @@ function cvsm_shortcode_accepted_list($atts) {
     $lists = cvsm_get_lists();
     $domaines = $lists['domaines'];
     $wilayas = $lists['wilayas'];
-
-    // For profile_type, we keep it dynamic as no list was provided
-    $types = $wpdb->get_col("SELECT DISTINCT profile_type FROM $table_name WHERE status='accepted' AND profile_type != '' ORDER BY profile_type ASC");
+    $types = $lists['profile_types']; // Use hardcoded types instead of dynamic query
     
     // 2. Query accepted submissions
     $results = $wpdb->get_results("SELECT * FROM $table_name WHERE status = 'accepted' ORDER BY processed_at DESC");
@@ -1340,7 +1383,7 @@ function cvsm_shortcode_accepted_list($atts) {
             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
             gap: 24px;
             margin: 0; /* Margin handled by parent container spacing */
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol'; /* Improved Font Stack */
         }
         .cvsm-card {
             background: #fff;
