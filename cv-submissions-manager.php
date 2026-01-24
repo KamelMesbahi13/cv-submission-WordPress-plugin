@@ -144,6 +144,58 @@ function cvsm_dashboard_page() {
         return;
     }
     
+    // Handle Manual Add Submission
+    if (isset($_POST['action']) && $_POST['action'] === 'cvsm_manual_add' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manual_add_nonce');
+        
+        $full_name = sanitize_text_field($_POST['full_name']);
+        $email = sanitize_email($_POST['email']);
+        $phone = sanitize_text_field($_POST['phone']);
+        $wilaya = sanitize_text_field($_POST['wilaya']);
+        $domaine = sanitize_text_field($_POST['domaine']);
+        $specialite = sanitize_text_field($_POST['specialite']);
+        $experience = sanitize_text_field($_POST['experience']);
+        $profile_type = sanitize_text_field($_POST['profile_type']);
+        $cv_file = '';
+        
+        // Handle File Upload
+        if (!empty($_FILES['cv_file']['name'])) {
+            $uploaded = $_FILES['cv_file'];
+            $upload_overrides = array('test_form' => false);
+            $movefile = wp_handle_upload($uploaded, $upload_overrides);
+            
+            if ($movefile && !isset($movefile['error'])) {
+                $cv_file = $movefile['url'];
+            } else {
+                echo '<div class="notice notice-error"><p>Erreur lors du téléchargement du fichier: ' . $movefile['error'] . '</p></div>';
+            }
+        }
+        
+        $result = $wpdb->insert(
+            $table_name,
+            array(
+                'full_name' => $full_name,
+                'email' => $email,
+                'phone' => $phone,
+                'wilaya' => $wilaya,
+                'domaine' => $domaine,
+                'specialite' => $specialite,
+                'experience' => $experience,
+                'profile_type' => $profile_type,
+                'cv_file' => $cv_file,
+                'status' => 'pending',
+                'submitted_at' => current_time('mysql')
+            ),
+            array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+        );
+        
+        if ($result) {
+            echo '<div class="notice notice-success"><p>Candidat ajouté avec succès!</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p>Erreur lors de l\'ajout: ' . $wpdb->last_error . '</p></div>';
+        }
+    }
+    
     if (isset($_GET['action']) && $_GET['action'] === 'create_table') {
         cvsm_create_table();
         echo '<div class="notice notice-success"><p>Table créée avec succès!</p></div>';
@@ -168,6 +220,7 @@ function cvsm_dashboard_page() {
         <h1 class="cvsm-title">
             <span class="dashicons dashicons-id-alt"></span>
             Gestion des CV Soumis
+            <button id="cvsm-open-modal" class="page-title-action">Ajouter un candidat</button>
         </h1>
         
         <?php if (CVSM_DEBUG): ?>
@@ -357,6 +410,103 @@ function cvsm_dashboard_page() {
                 </tbody>
             </table>
         </div>
+        </div>
+        
+        <!-- Add Candidate Modal -->
+        <?php $lists = cvsm_get_lists(); ?>
+        <div id="cvsm-modal" class="cvsm-modal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; overflow:auto; background-color:rgba(0,0,0,0.5);">
+            <div class="cvsm-modal-content" style="background-color:#fefefe; margin:5% auto; padding:20px; border:1px solid #888; width:50%; max-width:600px; border-radius:8px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:1px solid #eee; padding-bottom:10px;">
+                    <h2 style="margin:0;">Ajouter un candidat</h2>
+                    <span id="cvsm-close-modal" style="color:#aaa; float:right; font-size:28px; font-weight:bold; cursor:pointer;">&times;</span>
+                </div>
+                
+                <form method="post" enctype="multipart/form-data" action="">
+                    <?php wp_nonce_field('cvsm_manual_add_nonce'); ?>
+                    <input type="hidden" name="action" value="cvsm_manual_add">
+                    
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><label for="full_name">Nom et Prénom</label></th>
+                            <td><input name="full_name" type="text" id="full_name" class="regular-text" required></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="email">Email</label></th>
+                            <td><input name="email" type="email" id="email" class="regular-text" required></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="phone">Téléphone</label></th>
+                            <td><input name="phone" type="text" id="phone" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="wilaya">Wilaya</label></th>
+                            <td>
+                                <select name="wilaya" id="wilaya" class="regular-text">
+                                    <option value="">Sélectionner une wilaya</option>
+                                    <?php foreach ($lists['wilayas'] as $w): ?>
+                                        <option value="<?php echo esc_attr($w); ?>"><?php echo esc_html($w); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="domaine">Domaine</label></th>
+                            <td>
+                                <select name="domaine" id="domaine" class="regular-text">
+                                    <option value="">Sélectionner un domaine</option>
+                                    <?php foreach ($lists['domaines'] as $d): ?>
+                                        <option value="<?php echo esc_attr($d); ?>"><?php echo esc_html($d); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="specialite">Spécialité</label></th>
+                            <td><input name="specialite" type="text" id="specialite" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="experience">Expérience</label></th>
+                            <td><input name="experience" type="text" id="experience" class="regular-text" placeholder="Ex: 5 ans"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="profile_type">Type de Profil</label></th>
+                            <td><input name="profile_type" type="text" id="profile_type" class="regular-text" placeholder="Ex: sous-traitance"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="cv_file">CV (PDF)</label></th>
+                            <td><input name="cv_file" type="file" id="cv_file" accept=".pdf,.doc,.docx"></td>
+                        </tr>
+                    </table>
+                    
+                    <p class="submit">
+                        <input type="submit" name="submit" id="submit" class="button button-primary" value="Ajouter le candidat">
+                    </p>
+                </form>
+            </div>
+        </div>
+        
+        <script>
+        jQuery(document).ready(function($) {
+            var modal = $('#cvsm-modal');
+            var btn = $('#cvsm-open-modal');
+            var span = $('#cvsm-close-modal');
+            
+            btn.on('click', function(e) {
+                e.preventDefault();
+                modal.fadeIn();
+            });
+            
+            span.on('click', function() {
+                modal.fadeOut();
+            });
+            
+            $(window).on('click', function(event) {
+                if ($(event.target).is(modal)) {
+                    modal.fadeOut();
+                }
+            });
+        });
+        </script>
     </div>
     <?php
 }
@@ -1073,6 +1223,39 @@ function cvsm_add_test_data() {
 add_action('admin_init', 'cvsm_add_test_data');
 
 /**
+ * Get standard lists for Domain and Wilaya
+ */
+function cvsm_get_lists() {
+    $domaines = array(
+        'Architecture',
+        'CES-CET',
+        'Dissinateur projeteur',
+        'Génie Civil',
+        'Géotechnique',
+        'Hydraulique',
+        'Métreur',
+        'Topographie',
+        'VRD'
+    );
+    
+    $wilayas = array(
+        'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar', 
+        'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger', 
+        'Djelfa', 'Jijel', 'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba', 'Guelma', 
+        'Constantine', 'Médéa', 'Mostaganem', 'M’Sila', 'Mascara', 'Ouargla', 'Oran', 'El Bayadh', 
+        'Illizi', 'Bordj Bou Arréridj', 'Boumerdès', 'El Tarf', 'Tindouf', 'Tissemsilt', 'El Oued', 
+        'Khenchela', 'Souk Ahras', 'Tipaza', 'Mila', 'Aïn Defla', 'Naâma', 'Aïn Témouchent', 
+        'Ghardaïa', 'Relizane', 'Timimoun', 'Bordj Badji Mokhtar', 'Ouled Djellal', 'Béni Abbès', 
+        'In Salah', 'In Guezzam', 'Touggourt', 'Djanet', 'El Meghaier', 'El Menia'
+    );
+    
+    sort($domaines);
+    sort($wilayas);
+    
+    return array('domaines' => $domaines, 'wilayas' => $wilayas);
+}
+
+/**
  * Frontend Shortcode: [cvsm_accepted_list]
  * Displays accepted candidates in a grid
  */
@@ -1080,18 +1263,83 @@ function cvsm_shortcode_accepted_list($atts) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'cv_submissions';
     
-    // Query accepted submissions
+    // 1. Get Distinct Values for Filters
+    $lists = cvsm_get_lists();
+    $domaines = $lists['domaines'];
+    $wilayas = $lists['wilayas'];
+
+    // For profile_type, we keep it dynamic as no list was provided
+    $types = $wpdb->get_col("SELECT DISTINCT profile_type FROM $table_name WHERE status='accepted' AND profile_type != '' ORDER BY profile_type ASC");
+    
+    // 2. Query accepted submissions
     $results = $wpdb->get_results("SELECT * FROM $table_name WHERE status = 'accepted' ORDER BY processed_at DESC");
     
-    // Enqueue styles if not already (or add inline)
     ob_start();
     ?>
     <style>
+        /* Container for Filters */
+        .cvsm-filters-container {
+            display: flex;
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            border: 1px solid #e2e8f0;
+            margin-bottom: 30px;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .cvsm-filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .cvsm-filter-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .cvsm-select {
+            appearance: none;
+            background-color: #fff;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            padding: 10px 36px 10px 14px;
+            font-size: 0.95rem;
+            color: #0F172A;
+            width: 100%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+        }
+
+        .cvsm-select:hover {
+            border-color: #94a3b8;
+        }
+
+        .cvsm-select:focus {
+            outline: none;
+            border-color: #0F172A;
+            box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.1);
+        }
+        
+        /* Grid Styles */
         .cvsm-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
             gap: 24px;
-            margin: 40px 0;
+            margin: 0; /* Margin handled by parent container spacing */
             font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         }
         .cvsm-card {
@@ -1103,7 +1351,19 @@ function cvsm_shortcode_accepted_list($atts) {
             transition: all 0.3s ease;
             display: flex;
             flex-direction: column;
+            /* Animation for filtering */
+            animation: fadeIn 0.4s ease-out;
         }
+        
+        .cvsm-card.hidden {
+            display: none;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         .cvsm-card:hover {
             transform: translateY(-5px);
             box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
@@ -1222,76 +1482,181 @@ function cvsm_shortcode_accepted_list($atts) {
             border-radius: 8px;
             color: #64748b;
             border: 1px dashed #cbd5e1;
+            grid-column: 1 / -1;
+        }
+        
+        /* Mobile adjustment */
+        @media (max-width: 768px) {
+            .cvsm-filters-container {
+                flex-direction: column;
+                align-items: stretch;
+            }
         }
     </style>
 
-    <div class="cvsm-accepted-container">
-        <?php if ($results): ?>
-            <div class="cvsm-grid">
-                <?php foreach ($results as $profile): ?>
-                    <div class="cvsm-card">
-                        <div class="cvsm-card-header">
-                            <h3><?php echo esc_html($profile->full_name); ?></h3>
-                            <div class="cvsm-badges">
-                                <span class="cvsm-badge domaine"><?php echo esc_html($profile->domaine); ?></span>
-                                <?php if (!empty($profile->profile_type)): ?>
-                                    <span class="cvsm-badge type"><?php echo esc_html($profile->profile_type); ?></span>
-                                <?php endif; ?>
+    <div class="cvsm-wrapper">
+        <!-- Filter Bar -->
+        <div class="cvsm-filters-container">
+            <div class="cvsm-filter-group">
+                <label class="cvsm-filter-label">Catégorie</label>
+                <select id="cvsm-filter-domaine" class="cvsm-select">
+                    <option value="">Toutes les catégories</option>
+                    <?php foreach ($domaines as $d): ?>
+                        <option value="<?php echo esc_attr($d); ?>"><?php echo esc_html($d); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            
+            <div class="cvsm-filter-group">
+                <label class="cvsm-filter-label">Wilaya</label>
+                <select id="cvsm-filter-wilaya" class="cvsm-select">
+                    <option value="">Toutes les wilayas</option>
+                    <?php foreach ($wilayas as $w): ?>
+                        <option value="<?php echo esc_attr($w); ?>"><?php echo esc_html($w); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div class="cvsm-filter-group">
+                <label class="cvsm-filter-label">Type de Profil</label>
+                <select id="cvsm-filter-type" class="cvsm-select">
+                    <option value="">Tous les types</option>
+                    <?php foreach ($types as $t): ?>
+                        <option value="<?php echo esc_attr($t); ?>"><?php echo esc_html($t); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </div>
+
+        <div class="cvsm-accepted-container">
+            <?php if ($results): ?>
+                <div class="cvsm-grid" id="cvsm-grid">
+                    <?php foreach ($results as $profile): ?>
+                        <!-- Added data-attributes for filtering -->
+                        <div class="cvsm-card" 
+                             data-domaine="<?php echo esc_attr($profile->domaine); ?>" 
+                             data-wilaya="<?php echo esc_attr($profile->wilaya); ?>" 
+                             data-type="<?php echo esc_attr($profile->profile_type); ?>">
+                             
+                            <div class="cvsm-card-header">
+                                <h3><?php echo esc_html($profile->full_name); ?></h3>
+                                <div class="cvsm-badges">
+                                    <span class="cvsm-badge domaine"><?php echo esc_html($profile->domaine); ?></span>
+                                    <?php if (!empty($profile->profile_type)): ?>
+                                        <span class="cvsm-badge type"><?php echo esc_html($profile->profile_type); ?></span>
+                                    <?php endif; ?>
+                                </div>
                             </div>
-                        </div>
-                        <div class="cvsm-card-body">
-                            <div class="cvsm-info-group">
-                                <div class="cvsm-info-row">
-                                    <span class="cvsm-label">Spécialité:</span>
-                                    <span class="cvsm-value"><?php echo esc_html($profile->specialite); ?></span>
+                            <div class="cvsm-card-body">
+                                <div class="cvsm-info-group">
+                                    <div class="cvsm-info-row">
+                                        <span class="cvsm-label">Spécialité:</span>
+                                        <span class="cvsm-value"><?php echo esc_html($profile->specialite); ?></span>
+                                    </div>
+                                    <div class="cvsm-info-row">
+                                        <span class="cvsm-label">Expérience:</span>
+                                        <span class="cvsm-value"><?php echo esc_html($profile->experience); ?> ans</span>
+                                    </div>
+                                    <?php if (!empty($profile->wilaya)): ?>
+                                    <div class="cvsm-info-row">
+                                        <span class="cvsm-label">Wilaya:</span>
+                                        <span class="cvsm-value"><?php echo esc_html($profile->wilaya); ?></span>
+                                    </div>
+                                    <?php endif; ?>
                                 </div>
-                                <div class="cvsm-info-row">
-                                    <span class="cvsm-label">Expérience:</span>
-                                    <span class="cvsm-value"><?php echo esc_html($profile->experience); ?> ans</span>
-                                </div>
-                                <?php if (!empty($profile->wilaya)): ?>
-                                <div class="cvsm-info-row">
-                                    <span class="cvsm-label">Wilaya:</span>
-                                    <span class="cvsm-value"><?php echo esc_html($profile->wilaya); ?></span>
-                                </div>
-                                <?php endif; ?>
-                            </div>
-                            
-                            <div class="cvsm-divider"></div>
-                            
-                            <div class="cvsm-info-group">
-                                <?php if (!empty($profile->email)): ?>
-                                <div class="cvsm-info-row">
-                                    <span class="cvsm-label">Email:</span>
-                                    <span class="cvsm-value"><a href="mailto:<?php echo esc_attr($profile->email); ?>"><?php echo esc_html($profile->email); ?></a></span>
-                                </div>
-                                <?php endif; ?>
                                 
-                                <?php if (!empty($profile->phone)): ?>
-                                <div class="cvsm-info-row">
-                                    <span class="cvsm-label">Tél:</span>
-                                    <span class="cvsm-value"><a href="tel:<?php echo esc_attr($profile->phone); ?>"><?php echo esc_html($profile->phone); ?></a></span>
+                                <div class="cvsm-divider"></div>
+                                
+                                <div class="cvsm-info-group">
+                                    <?php if (!empty($profile->email)): ?>
+                                    <div class="cvsm-info-row">
+                                        <span class="cvsm-label">Email:</span>
+                                        <span class="cvsm-value"><a href="mailto:<?php echo esc_attr($profile->email); ?>"><?php echo esc_html($profile->email); ?></a></span>
+                                    </div>
+                                    <?php endif; ?>
+                                    
+                                    <?php if (!empty($profile->phone)): ?>
+                                    <div class="cvsm-info-row">
+                                        <span class="cvsm-label">Tél:</span>
+                                        <span class="cvsm-value"><a href="tel:<?php echo esc_attr($profile->phone); ?>"><?php echo esc_html($profile->phone); ?></a></span>
+                                    </div>
+                                    <?php endif; ?>
                                 </div>
+                            </div>
+                            <div class="cvsm-card-footer">
+                                <span class="cvsm-date">Soumis le <?php echo date_i18n('d/m/Y', strtotime($profile->submitted_at)); ?></span>
+                                <?php if (!empty($profile->cv_file)): ?>
+                                    <a href="<?php echo esc_url($profile->cv_file); ?>" target="_blank" class="cvsm-btn-download">
+                                        Voir CV →
+                                    </a>
                                 <?php endif; ?>
                             </div>
                         </div>
-                        <div class="cvsm-card-footer">
-                            <span class="cvsm-date">Soumis le <?php echo date_i18n('d/m/Y', strtotime($profile->submitted_at)); ?></span>
-                            <?php if (!empty($profile->cv_file)): ?>
-                                <a href="<?php echo esc_url($profile->cv_file); ?>" target="_blank" class="cvsm-btn-download">
-                                    Voir CV →
-                                </a>
-                            <?php endif; ?>
-                        </div>
+                    <?php endforeach; ?>
+                    <div id="cvsm-no-results" class="cvsm-empty" style="display: none;">
+                        <p>Aucun résultat ne correspond à vos critères.</p>
                     </div>
-                <?php endforeach; ?>
-            </div>
-        <?php else: ?>
-            <div class="cvsm-empty">
-                <p>Aucun profil accepté pour le moment.</p>
-            </div>
-        <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <div class="cvsm-empty">
+                    <p>Aucun profil accepté pour le moment.</p>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Elements
+        const filterDomaine = document.getElementById('cvsm-filter-domaine');
+        const filterWilaya = document.getElementById('cvsm-filter-wilaya');
+        const filterType = document.getElementById('cvsm-filter-type');
+        const cards = document.querySelectorAll('.cvsm-card');
+        const noResultsMsg = document.getElementById('cvsm-no-results');
+
+        if (!filterDomaine || !cards.length) return;
+
+        function filterCards() {
+            const valDomaine = filterDomaine.value.toLowerCase();
+            const valWilaya = filterWilaya.value.toLowerCase();
+            const valType = filterType.value.toLowerCase();
+            let visibleCount = 0;
+
+            cards.forEach(card => {
+                const cardDomaine = (card.getAttribute('data-domaine') || '').toLowerCase();
+                const cardWilaya = (card.getAttribute('data-wilaya') || '').toLowerCase();
+                const cardType = (card.getAttribute('data-type') || '').toLowerCase();
+
+                // Logic: Show if matches ALL selected fitlers
+                let matchDomaine = !valDomaine || cardDomaine === valDomaine;
+                let matchWilaya = !valWilaya || cardWilaya === valWilaya;
+                // Basic contains check for multi-select types stored as comma strings if necessary, 
+                // but usually exact match is expected relative to the distinct dropdown.
+                // Using .includes for Type to be safe if a card has "Type A, Type B"
+                let matchType = !valType || cardType.includes(valType);
+
+                if (matchDomaine && matchWilaya && matchType) {
+                    card.classList.remove('hidden');
+                    visibleCount++;
+                } else {
+                    card.classList.add('hidden');
+                }
+            });
+
+            // Show/Hide "No Results" message
+            if (visibleCount === 0) {
+                if (noResultsMsg) noResultsMsg.style.display = 'block';
+            } else {
+                if (noResultsMsg) noResultsMsg.style.display = 'none';
+            }
+        }
+
+        // Event Listeners
+        filterDomaine.addEventListener('change', filterCards);
+        filterWilaya.addEventListener('change', filterCards);
+        filterType.addEventListener('change', filterCards);
+    });
+    </script>
     <?php
     return ob_get_clean();
 }
