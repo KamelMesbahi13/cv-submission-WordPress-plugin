@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: CV Submissions Manager
+ * Plugin Name: Emploi Et Devis
  * Description: Gestion des soumissions de CV depuis le formulaire "Déposez votre CV"
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: KML
  * Text Domain: cv-submissions-manager
  * Domain Path: /languages
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('CVSM_VERSION', '1.1.0');
+define('CVSM_VERSION', '1.2.1');
 define('CVSM_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CVSM_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -33,6 +33,7 @@ function cvsm_log($message, $data = null) {
 
 function cvsm_activate() {
     cvsm_create_table();
+    devis_create_table();
     
     $upload_dir = wp_upload_dir();
     $cv_upload_dir = $upload_dir['basedir'] . '/cv-submissions';
@@ -54,12 +55,19 @@ register_deactivation_hook(__FILE__, 'cvsm_deactivate');
 function cvsm_init() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'cv_submissions';
+    $devis_table_name = $wpdb->prefix . 'devis_submissions';
     
     $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+    $devis_table_exists = $wpdb->get_var("SHOW TABLES LIKE '$devis_table_name'") === $devis_table_name;
     
     if (!$table_exists) {
-        cvsm_log('Table not found, creating...');
+        cvsm_log('CV Table not found, creating...');
         cvsm_create_table();
+    }
+    
+    if (!$devis_table_exists) {
+        cvsm_log('Devis Table not found, creating...');
+        devis_create_table();
     }
 }
 add_action('plugins_loaded', 'cvsm_init');
@@ -95,17 +103,95 @@ function cvsm_create_table() {
 }
 
 /**
+ * Create devis_submissions table for quote requests
+ */
+function devis_create_table() {
+    global $wpdb;
+    
+    $table_name = $wpdb->prefix . 'devis_submissions';
+    $charset_collate = $wpdb->get_charset_collate();
+    
+    $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+        id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+        full_name VARCHAR(255) NOT NULL DEFAULT '',
+        email VARCHAR(255) NOT NULL DEFAULT '',
+        phone VARCHAR(50) NOT NULL DEFAULT '',
+        lieu_projet VARCHAR(255) NOT NULL DEFAULT '',
+        lieu_siege VARCHAR(255) NOT NULL DEFAULT '',
+        services TEXT DEFAULT '',
+        plans_file VARCHAR(500) DEFAULT '',
+        status VARCHAR(20) DEFAULT 'pending',
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        processed_at DATETIME NULL,
+        admin_notes TEXT,
+        PRIMARY KEY (id)
+    ) $charset_collate;";
+    
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
+    
+    cvsm_log('Devis table creation executed');
+}
+
+/**
  * Add admin menu
  */
 function cvsm_admin_menu() {
     add_menu_page(
-        'CV Submissions',
-        'CV Submissions',
+        'Emploi Et Devis',
+        'Emploi Et Devis',
         'manage_options',
         'cv-submissions',
         'cvsm_dashboard_page',
         'dashicons-id-alt',
         30
+    );
+    
+    // Explicitly add the first submenu page to rename it to "Emploi"
+    add_submenu_page(
+        'cv-submissions',
+        'Emploi',
+        'Emploi',
+        'manage_options',
+        'cv-submissions',
+        'cvsm_dashboard_page'
+    );
+    
+    // Add Devis submenu page
+    add_submenu_page(
+        'cv-submissions',
+        'Devis',
+        'Devis',
+        'manage_options',
+        'cvsm-devis',
+        'cvsm_devis_page'
+    );
+    
+    add_submenu_page(
+        'cv-submissions',
+        'Wilaya',
+        'Wilaya',
+        'manage_options',
+        'cvsm-locations',
+        'cvsm_locations_page'
+    );
+    
+    add_submenu_page(
+        'cv-submissions',
+        'Métier',
+        'Métier',
+        'manage_options',
+        'cvsm-categories',
+        'cvsm_categories_page'
+    );
+    
+    add_submenu_page(
+        'cv-submissions',
+        'Type de profil',
+        'Type de profil',
+        'manage_options',
+        'cvsm-tags',
+        'cvsm_tags_page'
     );
 }
 add_action('admin_menu', 'cvsm_admin_menu');
@@ -114,7 +200,13 @@ add_action('admin_menu', 'cvsm_admin_menu');
  * Enqueue admin styles and scripts
  */
 function cvsm_admin_enqueue_scripts($hook) {
-    if ($hook !== 'toplevel_page_cv-submissions') {
+    // Load on both Emploi (toplevel) and Devis pages
+    $allowed_hooks = array(
+        'toplevel_page_cv-submissions',
+        'emploi-et-devis_page_cvsm-devis'
+    );
+    
+    if (!in_array($hook, $allowed_hooks)) {
         return;
     }
     
@@ -220,7 +312,7 @@ function cvsm_dashboard_page() {
     <div class="wrap cvsm-dashboard">
         <h1 class="cvsm-title">
             <span class="dashicons dashicons-id-alt"></span>
-            Gestion des CV Soumis
+            Gestion des employeurs
             <button id="cvsm-open-modal" class="page-title-action">Ajouter un candidat</button>
         </h1>
         
@@ -282,7 +374,7 @@ function cvsm_dashboard_page() {
                 <div class="stat-icon"><span class="dashicons dashicons-groups"></span></div>
                 <div class="stat-content">
                     <span class="stat-number"><?php echo esc_html($total); ?></span>
-                    <span class="stat-label">Total des CV</span>
+                    <span class="stat-label">Total des employeurs</span>
                 </div>
             </div>
             <div class="cvsm-stat-card pending">
@@ -319,6 +411,15 @@ function cvsm_dashboard_page() {
         <!-- Custom Search Bar (outside scrolling area) -->
         <div class="cvsm-controls-bar">
             <div class="cvsm-controls-left">
+                <div class="alignleft actions bulkactions" style="margin-right: 15px; display: inline-flex; align-items: center; gap: 5px;">
+                    <select name="cvsm_bulk_action" id="cvsm-bulk-action-selector">
+                        <option value="-1">Actions groupées</option>
+                        <option value="accept">Accepter</option>
+                        <option value="delete">Supprimer</option>
+                    </select>
+                    <input type="button" id="cvsm-doaction" class="button action" value="Appliquer">
+                </div>
+                
                 <label>Afficher 
                     <select id="cvsm-page-length">
                         <option value="10">10</option>
@@ -340,6 +441,7 @@ function cvsm_dashboard_page() {
             <table id="cv-submissions-table" class="display" style="width:100%">
                 <thead>
                     <tr>
+                        <th class="check-column"><input type="checkbox" id="cb-select-all-1"></th>
                         <th>#</th>
                         <th>Nom et Prénom</th>
                         <th>Email</th>
@@ -358,6 +460,9 @@ function cvsm_dashboard_page() {
                 <tbody>
                     <?php if ($submissions): foreach ($submissions as $sub): ?>
                     <tr data-status="<?php echo esc_attr($sub->status); ?>" data-id="<?php echo esc_attr($sub->id); ?>">
+                        <th scope="row" class="check-column">
+                            <input type="checkbox" name="post[]" value="<?php echo esc_attr($sub->id); ?>">
+                        </th>
                         <td><?php echo esc_html($sub->id); ?></td>
                         <td><strong><?php echo esc_html($sub->full_name); ?></strong></td>
                         <td><a href="mailto:<?php echo esc_attr($sub->email); ?>"><?php echo esc_html($sub->email); ?></a></td>
@@ -473,8 +578,9 @@ function cvsm_dashboard_page() {
                             <th scope="row"><label for="profile_type">Type de Profil</label></th>
                             <td>
                                 <select name="profile_type" id="profile_type" class="regular-text">
-                                    <option value="sous-traitance">sous-traitance</option>
-                                    <option value="pour recrutement">pour recrutement</option>
+                                    <?php foreach ($lists['profile_types'] as $pt): ?>
+                                        <option value="<?php echo esc_attr($pt); ?>"><?php echo esc_html($pt); ?></option>
+                                    <?php endforeach; ?>
                                 </select>
                             </td>
                         </tr>
@@ -496,6 +602,267 @@ function cvsm_dashboard_page() {
             var modal = $('#cvsm-modal');
             var btn = $('#cvsm-open-modal');
             var span = $('#cvsm-close-modal');
+            
+            btn.on('click', function(e) {
+                e.preventDefault();
+                modal.fadeIn();
+            });
+            
+            span.on('click', function() {
+                modal.fadeOut();
+            });
+            
+            $(window).on('click', function(event) {
+                if ($(event.target).is(modal)) {
+                    modal.fadeOut();
+                }
+            });
+        });
+        </script>
+    </div>
+    <?php
+}
+
+/**
+ * Devis Dashboard Page - Identical styling to Emploi
+ */
+function cvsm_devis_page() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'devis_submissions';
+    
+    $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+    
+    if (!$table_exists) {
+        echo '<div class="notice notice-error"><p>La table de base de données n\'existe pas. <a href="' . admin_url('admin.php?page=cvsm-devis&action=create_table') . '">Cliquez ici pour la créer</a></p></div>';
+        return;
+    }
+    
+    // Handle Manual Add Submission
+    if (isset($_POST['action']) && $_POST['action'] === 'devis_manual_add' && current_user_can('manage_options')) {
+        check_admin_referer('devis_manual_add_nonce');
+        
+        $full_name = sanitize_text_field($_POST['full_name']);
+        $email = sanitize_email($_POST['email']);
+        $phone = sanitize_text_field($_POST['phone']);
+        $lieu_projet = sanitize_text_field($_POST['lieu_projet']);
+        $lieu_siege = sanitize_text_field($_POST['lieu_siege']);
+        $services = isset($_POST['services']) ? sanitize_text_field(implode(', ', $_POST['services'])) : '';
+        $plans_file = '';
+        
+        // Handle File Upload
+        if (!empty($_FILES['plans_file']['name'])) {
+            $uploaded = $_FILES['plans_file'];
+            $upload_overrides = array('test_form' => false);
+            $movefile = wp_handle_upload($uploaded, $upload_overrides);
+            
+            if ($movefile && !isset($movefile['error'])) {
+                $plans_file = $movefile['url'];
+            } else {
+                echo '<div class="notice notice-error"><p>Erreur lors du téléchargement du fichier: ' . $movefile['error'] . '</p></div>';
+            }
+        }
+        
+        $result = $wpdb->insert(
+            $table_name,
+            array(
+                'full_name' => $full_name,
+                'email' => $email,
+                'phone' => $phone,
+                'lieu_projet' => $lieu_projet,
+                'lieu_siege' => $lieu_siege,
+                'services' => $services,
+                'plans_file' => $plans_file,
+                'status' => 'pending',
+                'submitted_at' => current_time('mysql')
+            ),
+            array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+        );
+        
+        if ($result) {
+            cvsm_trigger_cache_clear();
+            echo '<div class="notice notice-success"><p>Devis ajouté avec succès!</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p>Erreur lors de l\'ajout: ' . $wpdb->last_error . '</p></div>';
+        }
+    }
+    
+    if (isset($_GET['action']) && $_GET['action'] === 'create_table') {
+        devis_create_table();
+        echo '<div class="notice notice-success"><p>Table créée avec succès!</p></div>';
+    }
+    
+    $total = $wpdb->get_var("SELECT COUNT(*) FROM $table_name") ?: 0;
+    $pending = $wpdb->get_var("SELECT COUNT(*) FROM $table_name WHERE status = 'pending'") ?: 0;
+    $accepted = $wpdb->get_var("SELECT COUNT(*) FROM $table_name WHERE status = 'accepted'") ?: 0;
+    $rejected = $wpdb->get_var("SELECT COUNT(*) FROM $table_name WHERE status = 'rejected'") ?: 0;
+    
+    $submissions = $wpdb->get_results("SELECT * FROM $table_name ORDER BY submitted_at DESC");
+    
+    ?>
+    <div class="wrap cvsm-dashboard">
+        <h1 class="cvsm-title">
+            <span class="dashicons dashicons-media-document"></span>
+            Gestion des Devis
+            <button id="devis-open-modal" class="page-title-action">Ajouter un devis</button>
+        </h1>
+        
+        <!-- Statistics Cards -->
+        <div class="cvsm-stats-grid">
+            <div class="cvsm-stat-card total">
+                <div class="stat-icon"><span class="dashicons dashicons-clipboard"></span></div>
+                <div class="stat-content">
+                    <span class="stat-number"><?php echo esc_html($total); ?></span>
+                    <span class="stat-label">Total des demandes</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Custom Search Bar (outside scrolling area) -->
+        <div class="cvsm-controls-bar">
+            <div class="cvsm-controls-left">
+                <div class="alignleft actions bulkactions" style="margin-right: 15px; display: inline-flex; align-items: center; gap: 5px;">
+                    <select name="devis_bulk_action" id="devis-bulk-action-selector">
+                        <option value="-1">Actions groupées</option>
+                        <option value="delete">Supprimer</option>
+                    </select>
+                    <input type="button" id="devis-doaction" class="button action" value="Appliquer">
+                </div>
+                
+                <label>Afficher 
+                    <select id="devis-page-length">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                entrées</label>
+            </div>
+            <div class="cvsm-controls-right">
+                <div class="cvsm-search-box">
+                    <input type="text" id="devis-search-input" placeholder="Rechercher par nom, email, téléphone...">
+                </div>
+            </div>
+        </div>
+        
+        <!-- Submissions Table -->
+        <div class="cvsm-table-container">
+            <table id="devis-submissions-table" class="display" style="width:100%">
+                <thead>
+                    <tr>
+                        <th class="check-column"><input type="checkbox" id="devis-cb-select-all"></th>
+                        <th>#</th>
+                        <th>Nom et Prénom</th>
+                        <th>Email</th>
+                        <th>Téléphone</th>
+                        <th>Lieu de Projet</th>
+                        <th>Lieu du Siège</th>
+                        <th>Services</th>
+                        <th>Plans</th>
+                        <th>Date</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if ($submissions): foreach ($submissions as $sub): ?>
+                    <tr data-status="<?php echo esc_attr($sub->status); ?>" data-id="<?php echo esc_attr($sub->id); ?>">
+                        <th scope="row" class="check-column">
+                            <input type="checkbox" name="devis_post[]" value="<?php echo esc_attr($sub->id); ?>">
+                        </th>
+                        <td><?php echo esc_html($sub->id); ?></td>
+                        <td><strong><?php echo esc_html($sub->full_name); ?></strong></td>
+                        <td><a href="mailto:<?php echo esc_attr($sub->email); ?>"><?php echo esc_html($sub->email); ?></a></td>
+                        <td><a href="tel:<?php echo esc_attr($sub->phone); ?>"><?php echo esc_html($sub->phone); ?></a></td>
+                        <td><?php echo esc_html($sub->lieu_projet); ?></td>
+                        <td><?php echo esc_html($sub->lieu_siege); ?></td>
+                        <td><?php echo esc_html($sub->services); ?></td>
+                        <td>
+                            <?php if (!empty($sub->plans_file)): ?>
+                                <a href="<?php echo esc_url($sub->plans_file); ?>" target="_blank" class="cv-download-btn">
+                                    <span class="dashicons dashicons-media-document"></span> Voir Plans
+                                </a>
+                            <?php else: ?>
+                                <span class="no-cv">Pas de plans</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?php echo date_i18n('d/m/Y H:i', strtotime($sub->submitted_at)); ?></td>
+                        <td class="actions-cell">
+                            <button class="cvsm-btn cvsm-btn-delete devis-btn-delete" data-id="<?php echo esc_attr($sub->id); ?>" title="Supprimer définitivement">
+                                <span class="dashicons dashicons-trash"></span>
+                            </button>
+                        </td>
+                    </tr>
+                    <?php endforeach; endif; ?>
+                </tbody>
+            </table>
+        </div>
+        </div>
+        
+        <!-- Add Devis Modal -->
+        <div id="devis-modal" class="cvsm-modal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; overflow:auto; background-color:rgba(0,0,0,0.5);">
+            <div class="cvsm-modal-content" style="background-color:#fefefe; margin:5% auto; padding:20px; border:1px solid #888; width:50%; max-width:600px; border-radius:8px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:1px solid #eee; padding-bottom:10px;">
+                    <h2 style="margin:0;">Ajouter une demande de devis</h2>
+                    <span id="devis-close-modal" style="color:#aaa; float:right; font-size:28px; font-weight:bold; cursor:pointer;">&times;</span>
+                </div>
+                
+                <form method="post" enctype="multipart/form-data" action="">
+                    <?php wp_nonce_field('devis_manual_add_nonce'); ?>
+                    <input type="hidden" name="action" value="devis_manual_add">
+                    
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><label for="devis_full_name">Nom et Prénom</label></th>
+                            <td><input name="full_name" type="text" id="devis_full_name" class="regular-text" required></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="devis_email">Email</label></th>
+                            <td><input name="email" type="email" id="devis_email" class="regular-text" required></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="devis_phone">Téléphone</label></th>
+                            <td><input name="phone" type="text" id="devis_phone" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="devis_lieu_projet">Lieu de Projet</label></th>
+                            <td><input name="lieu_projet" type="text" id="devis_lieu_projet" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="devis_lieu_siege">Lieu du Siège</label></th>
+                            <td><input name="lieu_siege" type="text" id="devis_lieu_siege" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label>Services</label></th>
+                            <td>
+                                <label><input type="checkbox" name="services[]" value="Étude électrique courants forts"> Étude électrique courants forts</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude électrique courants faibles"> Étude électrique courants faibles</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude HVAC/CVC"> Étude HVAC/CVC</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude des fluides médicaux"> Étude des fluides médicaux</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude de plomberie sanitaire et gaz"> Étude de plomberie sanitaire et gaz</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude de détection incendie"> Étude de détection incendie</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude de protection incendie"> Étude de protection incendie</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude de climatisation"> Étude de climatisation</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude de chauffage"> Étude de chauffage</label><br>
+                                <label><input type="checkbox" name="services[]" value="Étude de Désenfumage"> Étude de Désenfumage</label>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="devis_plans_file">Plans</label></th>
+                            <td><input name="plans_file" type="file" id="devis_plans_file" accept=".pdf,.dwg,.dxf,.zip,.rar"></td>
+                        </tr>
+                    </table>
+                    
+                    <p class="submit">
+                        <input type="submit" name="submit" id="devis_submit" class="button button-primary" value="Ajouter le devis">
+                    </p>
+                </form>
+            </div>
+        </div>
+        
+        <script>
+        jQuery(document).ready(function($) {
+            var modal = $('#devis-modal');
+            var btn = $('#devis-open-modal');
+            var span = $('#devis-close-modal');
             
             btn.on('click', function(e) {
                 e.preventDefault();
@@ -624,6 +991,217 @@ function cvsm_delete_cv() {
 add_action('wp_ajax_cvsm_delete_cv', 'cvsm_delete_cv');
 
 /**
+ * AJAX handler for bulk actions
+ */
+function cvsm_bulk_action() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $ids = isset($_POST['ids']) ? array_map('intval', $_POST['ids']) : array();
+    $action_type = isset($_POST['action_type']) ? sanitize_text_field($_POST['action_type']) : '';
+    
+    if (empty($ids) || empty($action_type)) {
+        wp_send_json_error('Paramètres manquants');
+    }
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'cv_submissions';
+    $count = 0;
+    
+    if ($action_type === 'accept') {
+        foreach ($ids as $id) {
+            $result = $wpdb->update(
+                $table_name,
+                array(
+                    'status' => 'accepted',
+                    'processed_at' => current_time('mysql')
+                ),
+                array('id' => $id),
+                array('%s', '%s'),
+                array('%d')
+            );
+            if ($result !== false) $count++;
+        }
+    } elseif ($action_type === 'delete') {
+        foreach ($ids as $id) {
+            $result = $wpdb->delete(
+                $table_name,
+                array('id' => $id),
+                array('%d')
+            );
+            if ($result !== false) $count++;
+        }
+    }
+    
+    cvsm_trigger_cache_clear();
+    wp_send_json_success(array('message' => "$count éléments traités avec succès"));
+}
+add_action('wp_ajax_cvsm_bulk_action', 'cvsm_bulk_action');
+
+/**
+ * ============================================
+ * DEVIS AJAX HANDLERS
+ * ============================================
+ */
+
+/**
+ * AJAX handler for accepting a Devis
+ */
+function devis_accept_submission() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $id = intval($_POST['id']);
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'devis_submissions';
+    
+    $result = $wpdb->update(
+        $table_name,
+        array(
+            'status' => 'accepted',
+            'processed_at' => current_time('mysql')
+        ),
+        array('id' => $id),
+        array('%s', '%s'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        cvsm_trigger_cache_clear();
+        cvsm_log('Devis accepted', array('id' => $id));
+        wp_send_json_success(array('message' => 'Devis accepté avec succès'));
+    } else {
+        wp_send_json_error('Erreur lors de la mise à jour');
+    }
+}
+add_action('wp_ajax_devis_accept', 'devis_accept_submission');
+
+/**
+ * AJAX handler for rejecting a Devis
+ */
+function devis_reject_submission() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $id = intval($_POST['id']);
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'devis_submissions';
+    
+    $result = $wpdb->update(
+        $table_name,
+        array(
+            'status' => 'rejected',
+            'processed_at' => current_time('mysql')
+        ),
+        array('id' => $id),
+        array('%s', '%s'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        cvsm_trigger_cache_clear();
+        cvsm_log('Devis rejected', array('id' => $id));
+        wp_send_json_success(array('message' => 'Devis rejeté'));
+    } else {
+        wp_send_json_error('Erreur lors de la mise à jour');
+    }
+}
+add_action('wp_ajax_devis_reject', 'devis_reject_submission');
+
+/**
+ * AJAX handler for deleting a Devis
+ */
+function devis_delete_submission() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $id = intval($_POST['id']);
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'devis_submissions';
+    
+    $result = $wpdb->delete(
+        $table_name,
+        array('id' => $id),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        cvsm_trigger_cache_clear();
+        cvsm_log('Devis deleted', array('id' => $id));
+        wp_send_json_success(array('message' => 'Devis supprimé définitivement'));
+    } else {
+        wp_send_json_error('Erreur lors de la suppression');
+    }
+}
+add_action('wp_ajax_devis_delete', 'devis_delete_submission');
+
+/**
+ * AJAX handler for Devis bulk actions
+ */
+function devis_bulk_action() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $ids = isset($_POST['ids']) ? array_map('intval', $_POST['ids']) : array();
+    $action_type = isset($_POST['action_type']) ? sanitize_text_field($_POST['action_type']) : '';
+    
+    if (empty($ids) || empty($action_type)) {
+        wp_send_json_error('Paramètres manquants');
+    }
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'devis_submissions';
+    $count = 0;
+    
+    if ($action_type === 'accept') {
+        foreach ($ids as $id) {
+            $result = $wpdb->update(
+                $table_name,
+                array(
+                    'status' => 'accepted',
+                    'processed_at' => current_time('mysql')
+                ),
+                array('id' => $id),
+                array('%s', '%s'),
+                array('%d')
+            );
+            if ($result !== false) $count++;
+        }
+    } elseif ($action_type === 'delete') {
+        foreach ($ids as $id) {
+            $result = $wpdb->delete(
+                $table_name,
+                array('id' => $id),
+                array('%d')
+            );
+            if ($result !== false) $count++;
+        }
+    }
+    
+    cvsm_trigger_cache_clear();
+    wp_send_json_success(array('message' => "$count éléments traités avec succès"));
+}
+add_action('wp_ajax_devis_bulk_action', 'devis_bulk_action');
+
+/**
  * ============================================
  * ELEMENTOR PRO FORM INTEGRATION (FIXED)
  * ============================================
@@ -638,14 +1216,6 @@ function cvsm_capture_elementor_form($record, $handler) {
     
     try {
         global $wpdb;
-        $table_name = $wpdb->prefix . 'cv_submissions';
-        
-        // Ensure table exists
-        $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
-        if (!$table_exists) {
-            cvsm_log('Table not found, creating...');
-            cvsm_create_table();
-        }
         
         // Get form name for logging
         $form_name = $record->get_form_settings('form_name');
@@ -662,31 +1232,20 @@ function cvsm_capture_elementor_form($record, $handler) {
         
         cvsm_log('Processed Fields', $fields);
         
-        // Map using EXACT field IDs from your Elementor form
+        // Detect if this is a Devis form by checking for devis-specific fields
+        $is_devis_form = isset($fields['field_2effaf7']) || isset($fields['field_4c127c0']) || isset($fields['field_18c6a0e']);
+        
+        // Also check form name for "devis" keyword
+        if (stripos($form_name, 'devis') !== false) {
+            $is_devis_form = true;
+        }
+        
+        cvsm_log('Is Devis Form: ' . ($is_devis_form ? 'Yes' : 'No'));
+        
+        // Common fields
         $full_name = isset($fields['name']) ? $fields['name'] : '';
         $email = isset($fields['email']) ? $fields['email'] : '';
         $phone = isset($fields['field_f02977c']) ? $fields['field_f02977c'] : '';
-        $wilaya = isset($fields['field_f2f6b29']) ? $fields['field_f2f6b29'] : '';
-        $domaine = isset($fields['field_4b4ee37']) ? $fields['field_4b4ee37'] : '';
-        $specialite = isset($fields['field_5a7fc87']) ? $fields['field_5a7fc87'] : '';
-        $experience = isset($fields['field_3b0b51f']) ? $fields['field_3b0b51f'] : '';
-        $profile_type = isset($fields['field_77273a6']) ? $fields['field_77273a6'] : '';
-        
-        cvsm_log('Mapped Values', array(
-            'full_name' => $full_name,
-            'email' => $email,
-            'phone' => $phone,
-            'wilaya' => $wilaya,
-            'domaine' => $domaine,
-            'specialite' => $specialite,
-            'experience' => $experience,
-            'profile_type' => $profile_type
-        ));
-        
-        // Handle arrays (checkboxes, multi-select)
-        if (is_array($profile_type)) {
-            $profile_type = implode(', ', $profile_type);
-        }
         
         // Only proceed if we have at least name or email
         if (empty($full_name) && empty($email)) {
@@ -694,8 +1253,8 @@ function cvsm_capture_elementor_form($record, $handler) {
             return;
         }
         
-        // Handle CV file upload - field ID: field_9f19160
-        $cv_file = '';
+        // Handle file upload
+        $file_url = '';
         $files = $record->get('files');
         cvsm_log('Files Received', $files);
         
@@ -703,68 +1262,140 @@ function cvsm_capture_elementor_form($record, $handler) {
             $file_data = $files['field_9f19160'];
             if (!empty($file_data['url'])) {
                 $url = $file_data['url'];
-                // Handle case where URL is an array
                 if (is_array($url)) {
-                    $cv_file = isset($url[0]) ? $url[0] : '';
+                    $file_url = isset($url[0]) ? $url[0] : '';
                 } else {
-                    $cv_file = $url;
+                    $file_url = $url;
                 }
             }
         }
         
         // Also check general files array
-        if (empty($cv_file) && !empty($files)) {
+        if (empty($file_url) && !empty($files)) {
             foreach ($files as $file_key => $file_data) {
                 if (is_array($file_data) && !empty($file_data['url'])) {
                     $url = $file_data['url'];
-                    // Handle case where URL is an array
                     if (is_array($url)) {
-                        $cv_file = isset($url[0]) ? $url[0] : '';
+                        $file_url = isset($url[0]) ? $url[0] : '';
                     } else {
-                        $cv_file = $url;
+                        $file_url = $url;
                     }
                     break;
                 } elseif (is_string($file_data)) {
-                    $cv_file = $file_data;
+                    $file_url = $file_data;
                     break;
                 }
             }
         }
         
-        // Final safety check - ensure cv_file is a string
-        if (is_array($cv_file)) {
-            $cv_file = isset($cv_file[0]) ? $cv_file[0] : '';
+        // Final safety check - ensure file_url is a string
+        if (is_array($file_url)) {
+            $file_url = isset($file_url[0]) ? $file_url[0] : '';
         }
         
-        cvsm_log('CV File URL (final)', $cv_file);
+        cvsm_log('File URL (final)', $file_url);
         
-        // Insert into database
-        $insert_data = array(
-            'full_name' => sanitize_text_field($full_name),
-            'email' => sanitize_email($email),
-            'phone' => sanitize_text_field($phone),
-            'wilaya' => sanitize_text_field($wilaya),
-            'domaine' => sanitize_text_field($domaine),
-            'specialite' => sanitize_text_field($specialite),
-            'experience' => sanitize_text_field($experience),
-            'cv_file' => is_string($cv_file) ? esc_url_raw($cv_file) : '',
-            'profile_type' => sanitize_text_field($profile_type),
-            'status' => 'pending',
-            'submitted_at' => current_time('mysql')
-        );
-        
-        cvsm_log('Inserting data', $insert_data);
-        
-        $result = $wpdb->insert(
-            $table_name,
-            $insert_data,
-            array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
-        );
-        
-        if ($result === false) {
-            cvsm_log('INSERT FAILED! DB Error: ' . $wpdb->last_error);
+        if ($is_devis_form) {
+            // ============================================
+            // DEVIS FORM PROCESSING
+            // ============================================
+            $table_name = $wpdb->prefix . 'devis_submissions';
+            
+            // Ensure table exists
+            $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+            if (!$table_exists) {
+                cvsm_log('Devis Table not found, creating...');
+                devis_create_table();
+            }
+            
+            // Map Devis-specific fields
+            $lieu_projet = isset($fields['field_2effaf7']) ? $fields['field_2effaf7'] : '';
+            $lieu_siege = isset($fields['field_4c127c0']) ? $fields['field_4c127c0'] : '';
+            $services = isset($fields['field_18c6a0e']) ? $fields['field_18c6a0e'] : '';
+            
+            // Handle arrays (checkboxes, multi-select)
+            if (is_array($services)) {
+                $services = implode(', ', $services);
+            }
+            
+            $insert_data = array(
+                'full_name' => sanitize_text_field($full_name),
+                'email' => sanitize_email($email),
+                'phone' => sanitize_text_field($phone),
+                'lieu_projet' => sanitize_text_field($lieu_projet),
+                'lieu_siege' => sanitize_text_field($lieu_siege),
+                'services' => sanitize_text_field($services),
+                'plans_file' => is_string($file_url) ? esc_url_raw($file_url) : '',
+                'status' => 'pending',
+                'submitted_at' => current_time('mysql')
+            );
+            
+            cvsm_log('Inserting DEVIS data', $insert_data);
+            
+            $result = $wpdb->insert(
+                $table_name,
+                $insert_data,
+                array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+            );
+            
+            if ($result === false) {
+                cvsm_log('DEVIS INSERT FAILED! DB Error: ' . $wpdb->last_error);
+            } else {
+                cvsm_log('DEVIS INSERT SUCCESS! New ID: ' . $wpdb->insert_id);
+            }
+            
         } else {
-            cvsm_log('INSERT SUCCESS! New ID: ' . $wpdb->insert_id);
+            // ============================================
+            // CV/EMPLOI FORM PROCESSING
+            // ============================================
+            $table_name = $wpdb->prefix . 'cv_submissions';
+            
+            // Ensure table exists
+            $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+            if (!$table_exists) {
+                cvsm_log('CV Table not found, creating...');
+                cvsm_create_table();
+            }
+            
+            // Map CV-specific fields
+            $wilaya = isset($fields['field_f2f6b29']) ? $fields['field_f2f6b29'] : '';
+            $domaine = isset($fields['field_4b4ee37']) ? $fields['field_4b4ee37'] : '';
+            $specialite = isset($fields['field_5a7fc87']) ? $fields['field_5a7fc87'] : '';
+            $experience = isset($fields['field_3b0b51f']) ? $fields['field_3b0b51f'] : '';
+            $profile_type = isset($fields['field_77273a6']) ? $fields['field_77273a6'] : '';
+            
+            // Handle arrays (checkboxes, multi-select)
+            if (is_array($profile_type)) {
+                $profile_type = implode(', ', $profile_type);
+            }
+            
+            $insert_data = array(
+                'full_name' => sanitize_text_field($full_name),
+                'email' => sanitize_email($email),
+                'phone' => sanitize_text_field($phone),
+                'wilaya' => sanitize_text_field($wilaya),
+                'domaine' => sanitize_text_field($domaine),
+                'specialite' => sanitize_text_field($specialite),
+                'experience' => sanitize_text_field($experience),
+                'cv_file' => is_string($file_url) ? esc_url_raw($file_url) : '',
+                'profile_type' => sanitize_text_field($profile_type),
+                'status' => 'pending',
+                'submitted_at' => current_time('mysql')
+            );
+            
+            cvsm_log('Inserting CV data', $insert_data);
+            
+            $result = $wpdb->insert(
+                $table_name,
+                $insert_data,
+                array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+            );
+            
+            if ($result === false) {
+                cvsm_log('CV INSERT FAILED! DB Error: ' . $wpdb->last_error);
+            } else {
+                cvsm_log('CV INSERT SUCCESS! New ID: ' . $wpdb->insert_id);
+            }
         }
         
     } catch (Exception $e) {
@@ -1265,20 +1896,64 @@ function cvsm_trigger_cache_clear() {
  * Get standard lists for Domain and Wilaya
  */
 function cvsm_get_lists() {
-    $domaines = array(
-        'Architecture',
-        'CES-CET',
-        'Dissinateur projeteur',
-        'Génie Civil',
-        'Géotechnique',
-        'Hydraulique',
-        'Métreur',
-        'Topographie',
-        'VRD'
-    );
+    // Get categories from options or use default
+    $saved_categories = get_option('cvsm_categories_list');
     
-    // Exact order as requested by user
-    $wilayas = array(
+    // Migration: If no categories exist, create them from hardcoded list
+    if ($saved_categories === false) {
+        $default_domaines = array(
+            'Architecture',
+            'CES-CET',
+            'Dissinateur projeteur',
+            'Génie Civil',
+            'Géotechnique',
+            'Hydraulique',
+            'Métreur',
+            'Topographie',
+            'VRD'
+        );
+        sort($default_domaines);
+        
+        $categories = array();
+        
+        // Prevent infinite loop if called during init
+        remove_action('save_post', 'cvsm_save_post_hook'); 
+        
+        foreach ($default_domaines as $d) {
+            $slug = sanitize_title($d);
+            
+            // Create Page
+            $page_id = wp_insert_post(array(
+                'post_title'    => $d,
+                'post_content'  => '[cvsm_accepted_list category="' . $slug . '"]',
+                'post_status'   => 'publish',
+                'post_type'     => 'page',
+                'post_name'     => $slug
+            ));
+            
+            if ($page_id && !is_wp_error($page_id)) {
+                $categories[] = array(
+                    'name' => $d,
+                    'slug' => $slug,
+                    'page_id' => $page_id
+                );
+            }
+        }
+        
+        update_option('cvsm_categories_list', $categories);
+        $domaines = array_column($categories, 'name');
+    } else {
+        // Just extract names for the simple list
+        $domaines = array_column($saved_categories, 'name');
+        sort($domaines);
+    }
+    
+    // Get wilayas from options or use default
+    $saved_wilayas = get_option('cvsm_wilayas_list');
+    $wilayas_for_return = array();
+    
+    // Default Wilayas List
+    $default_wilayas = array(
         'Adrar', 'Chlef', 'Laghouat', 'Oum El Bouaghi', 'Batna', 'Béjaïa', 'Biskra', 'Béchar', 
         'Blida', 'Bouira', 'Tamanrasset', 'Tébessa', 'Tlemcen', 'Tiaret', 'Tizi Ouzou', 'Alger', 
         'Djelfa', 'Jijel', 'Sétif', 'Saïda', 'Skikda', 'Sidi Bel Abbès', 'Annaba', 'Guelma', 
@@ -1289,15 +1964,602 @@ function cvsm_get_lists() {
         'In Salah', 'In Guezzam', 'Touggourt', 'Djanet', 'El Meghaier', 'El Menia'
     );
     
-    $profile_types = array(
-        'sous-traitance',
-        'pour recrutement'
-    );
+    if ($saved_wilayas === false) {
+        $saved_wilayas = $default_wilayas;
+    }
+
+    // CHECK MIGRATION: If the first item is a string, we need to migrate to Objects {name, slug, page_id}
+    $needs_migration = false;
+    if (!empty($saved_wilayas)) {
+        $first_item = reset($saved_wilayas);
+        if (is_string($first_item)) {
+            $needs_migration = true;
+        }
+    } else {
+        // Empty list, treat as migrated (empty)
+        $saved_wilayas = array(); 
+    }
     
-    sort($domaines);
-    // Removed sort($wilayas) to keep user's specific order
+    if ($needs_migration) {
+        $new_wilayas_structure = array();
+        
+        // Prevent infinite loop hooks
+        remove_action('save_post', 'cvsm_save_post_hook'); 
+        
+        foreach ($saved_wilayas as $w_name) {
+            $slug = sanitize_title($w_name);
+            
+            // Create Page
+            $page_id = wp_insert_post(array(
+                'post_title'    => $w_name,
+                'post_content'  => '[cvsm_accepted_list wilaya="' . $slug . '"]',
+                'post_status'   => 'publish',
+                'post_type'     => 'page',
+                'post_name'     => $slug
+            ));
+            
+            if ($page_id && !is_wp_error($page_id)) {
+                $new_wilayas_structure[] = array(
+                    'name' => $w_name,
+                    'slug' => $slug,
+                    'page_id' => $page_id
+                );
+            } else {
+                 // Fallback if page creation fails, still keep data
+                 $new_wilayas_structure[] = array(
+                    'name' => $w_name,
+                    'slug' => $slug,
+                    'page_id' => 0
+                );
+            }
+        }
+        
+        update_option('cvsm_wilayas_list', $new_wilayas_structure);
+        // For return value, we just want the names
+        $wilayas_for_return = array_column($new_wilayas_structure, 'name');
+    } else {
+        // Already migrated (Array of Arrays)
+        if (!empty($saved_wilayas)) {
+             $wilayas_for_return = array_column($saved_wilayas, 'name');
+        } else {
+             $wilayas_for_return = array();
+        }
+    }
+    
+    $wilayas = $wilayas_for_return;
+
+    
+    // Get Tags (formerly profile types)
+    $saved_tags = get_option('cvsm_tags_list');
+    
+    // Migration: If no tags exist, create from hardcoded defaults
+    if ($saved_tags === false) {
+        $default_types = array(
+            'sous-traitance',
+            'pour recrutement'
+        );
+        
+        $tags = array();
+        
+        // Prevent infinite loop
+        remove_action('save_post', 'cvsm_save_post_hook'); 
+        
+        foreach ($default_types as $t) {
+            $slug = sanitize_title($t);
+            
+            // Create Page
+            $page_id = wp_insert_post(array(
+                'post_title'    => $t, // Title: "sous-traitance"
+                'post_content'  => '[cvsm_accepted_list tag="' . $slug . '"]',
+                'post_status'   => 'publish',
+                'post_type'     => 'page',
+                'post_name'     => $slug
+            ));
+            
+            if ($page_id && !is_wp_error($page_id)) {
+                $tags[] = array(
+                    'name' => $t,
+                    'slug' => $slug,
+                    'page_id' => $page_id
+                );
+            }
+        }
+        
+        update_option('cvsm_tags_list', $tags);
+        $profile_types = array_column($tags, 'name');
+    } else {
+        $profile_types = array_column($saved_tags, 'name');
+    }
     
     return array('domaines' => $domaines, 'wilayas' => $wilayas, 'profile_types' => $profile_types);
+}
+
+/**
+ * Manage Tags Page
+ */
+function cvsm_tags_page() {
+    // Handle Add
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'add_tag' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_tags');
+        
+        $name = sanitize_text_field($_POST['new_tag_name']);
+        $slug = sanitize_title($_POST['new_tag_slug']);
+        
+        if (empty($slug)) {
+            $slug = sanitize_title($name);
+        }
+        
+        if (!empty($name) && !empty($slug)) {
+            $tags = get_option('cvsm_tags_list', array());
+            
+            // Check for duplicate slug
+            $exists = false;
+            foreach ($tags as $t) {
+                if ($t['slug'] === $slug) {
+                    $exists = true;
+                    break;
+                }
+            }
+            
+            if (!$exists) {
+                // Create Page
+                $page_id = wp_insert_post(array(
+                    'post_title'    => $name,
+                    'post_content'  => '[cvsm_accepted_list tag="' . $slug . '"]',
+                    'post_status'   => 'publish',
+                    'post_type'     => 'page',
+                    'post_name'     => $slug
+                ));
+                
+                if ($page_id && !is_wp_error($page_id)) {
+                    $tags[] = array(
+                        'name' => $name,
+                        'slug' => $slug,
+                        'page_id' => $page_id
+                    );
+                    update_option('cvsm_tags_list', $tags);
+                    echo '<div class="notice notice-success"><p>Type de profil ajouté et page créée: <a href="' . get_permalink($page_id) . '" target="_blank">' . esc_html($name) . '</a></p></div>';
+                } else {
+                    echo '<div class="notice notice-error"><p>Erreur lors de la création de la page.</p></div>';
+                }
+            } else {
+                echo '<div class="notice notice-warning"><p>Un type de profil avec ce slug existe déjà.</p></div>';
+            }
+        }
+    }
+
+    // Handle Delete
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'delete_tag' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_tags');
+        $delete_index = intval($_POST['delete_index']);
+        $tags = get_option('cvsm_tags_list', array());
+        
+        if (isset($tags[$delete_index])) {
+            $deleted = $tags[$delete_index];
+            
+            // Delete Page
+            if (!empty($deleted['page_id'])) {
+                wp_delete_post($deleted['page_id'], true);
+            }
+            
+            unset($tags[$delete_index]);
+            $tags = array_values($tags); // Re-index
+            update_option('cvsm_tags_list', $tags);
+            echo '<div class="notice notice-success"><p>Type de profil et page associée supprimés: ' . esc_html($deleted['name']) . '</p></div>';
+        }
+    }
+
+    $tags = get_option('cvsm_tags_list', array());
+    // Fallback if empty (should be handled by get_lists migration, but just in case)
+    if (empty($tags)) {
+        cvsm_get_lists(); // Trigger migration
+        $tags = get_option('cvsm_tags_list', array());
+    }
+    ?>
+    <div class="wrap">
+        <h1>Gestion des Types de Profil</h1>
+        
+        <div style="display: flex; gap: 20px; align-items: flex-start; margin-top: 20px;">
+            <!-- Add New Form -->
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1; max-width: 400px;">
+                <h2>Ajouter un Type de profil</h2>
+                <form method="post" action="">
+                    <?php wp_nonce_field('cvsm_manage_tags'); ?>
+                    <input type="hidden" name="cvsm_action" value="add_tag">
+                    <p>
+                        <label>Nom du Type de profil</label><br>
+                        <input type="text" name="new_tag_name" class="regular-text" placeholder="Ex: Stagiaire" required style="width: 100%;">
+                    </p>
+                    <p>
+                        <label>Slug (optionnel)</label><br>
+                        <input type="text" name="new_tag_slug" class="regular-text" placeholder="Ex: stagiaire" style="width: 100%;">
+                    </p>
+                    <p class="description">Une page WordPress sera automatiquement créée pour ce type de profil.</p>
+                    <p>
+                        <input type="submit" class="button button-primary" value="Ajouter">
+                    </p>
+                </form>
+            </div>
+
+            <!-- List -->
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1;">
+                <h2>Liste des Types de profil (<?php echo count($tags); ?>)</h2>
+                <?php if (empty($tags)): ?>
+                    <p>Aucun type de profil configuré.</p>
+                <?php else: ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th>Nom</th>
+                                <th>Slug</th>
+                                <th>Page</th>
+                                <th style="width: 100px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($tags as $index => $t): ?>
+                            <tr>
+                                <td><?php echo esc_html($t['name']); ?></td>
+                                <td><code><?php echo esc_html($t['slug']); ?></code></td>
+                                <td>
+                                    <?php if (!empty($t['page_id']) && get_post($t['page_id'])): ?>
+                                        <a href="<?php echo get_permalink($t['page_id']); ?>" target="_blank">Voir la page <span class="dashicons dashicons-external"></span></a>
+                                    <?php else: ?>
+                                        <span style="color: red;">Page introuvable</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <form method="post" action="" style="display:inline;">
+                                        <?php wp_nonce_field('cvsm_manage_tags'); ?>
+                                        <input type="hidden" name="cvsm_action" value="delete_tag">
+                                        <input type="hidden" name="delete_index" value="<?php echo $index; ?>">
+                                        <button type="submit" class="button button-link-delete" onclick="return confirm('Attention: Cela supprimera définitivement la page associée ! Êtes-vous sûr ?');">Supprimer</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+/**
+ * Manage Locations Page
+ */
+function cvsm_locations_page() {
+    // Handle Add
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'add_wilaya' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_locations');
+        
+        $name = sanitize_text_field($_POST['new_wilaya']);
+        $slug = sanitize_title($_POST['new_wilaya_slug']);
+        
+         if (empty($slug)) {
+            $slug = sanitize_title($name);
+        }
+        
+        if (!empty($name)) {
+            $wilayas = get_option('cvsm_wilayas_list', array());
+            
+            // Check if legacy (strings) or new (arrays) - though get_lists should have migrated it by now
+             $is_legacy = false;
+             if (!empty($wilayas) && is_string($wilayas[0])) {
+                 // Force Migration first just in case
+                 cvsm_get_lists();
+                 $wilayas = get_option('cvsm_wilayas_list', array());
+             }
+            
+            // Check for duplicate slug
+            $exists = false;
+            foreach ($wilayas as $w) {
+                if (is_array($w) && $w['slug'] === $slug) {
+                    $exists = true;
+                    break;
+                }
+            }
+            
+            if (!$exists) {
+                // Create Page
+                $page_id = wp_insert_post(array(
+                    'post_title'    => $name,
+                    'post_content'  => '[cvsm_accepted_list wilaya="' . $slug . '"]',
+                    'post_status'   => 'publish',
+                    'post_type'     => 'page',
+                    'post_name'     => $slug
+                ));
+                
+                 if ($page_id && !is_wp_error($page_id)) {
+                    $wilayas[] = array(
+                        'name' => $name,
+                        'slug' => $slug,
+                        'page_id' => $page_id
+                    );
+                    
+                    // Sort alphabetically by name
+                    usort($wilayas, function($a, $b) {
+                         if (is_array($a) && is_array($b)) {
+                            return strcmp($a['name'], $b['name']);
+                         }
+                         return 0;
+                    });
+                    
+                    update_option('cvsm_wilayas_list', $wilayas);
+                    echo '<div class="notice notice-success"><p>Wilaya ajoutée et page créée: <a href="' . get_permalink($page_id) . '" target="_blank">' . esc_html($name) . '</a></p></div>';
+                } else {
+                     echo '<div class="notice notice-error"><p>Erreur lors de la création de la page.</p></div>';
+                }
+            } else {
+                 echo '<div class="notice notice-warning"><p>Une wilaya avec ce slug existe déjà.</p></div>';
+            }
+        }
+    }
+
+    // Handle Delete
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'delete_wilaya' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_locations');
+        $delete_index = intval($_POST['delete_index']);
+        $wilayas = get_option('cvsm_wilayas_list', array());
+        
+        if (isset($wilayas[$delete_index])) {
+             $deleted = $wilayas[$delete_index];
+             
+             // Check stricture
+             if (is_array($deleted) && isset($deleted['page_id'])) {
+                 // Delete Page
+                if (!empty($deleted['page_id'])) {
+                    wp_delete_post($deleted['page_id'], true);
+                }
+                echo '<div class="notice notice-success"><p>Wilaya et page supprimées: ' . esc_html($deleted['name']) . '</p></div>';
+             } else {
+                 echo '<div class="notice notice-success"><p>Wilaya supprimée: ' . esc_html(is_string($deleted) ? $deleted : '') . '</p></div>';
+             }
+
+            unset($wilayas[$delete_index]);
+            $wilayas = array_values($wilayas); // Re-index
+            update_option('cvsm_wilayas_list', $wilayas);
+        }
+    }
+
+    $wilayas = get_option('cvsm_wilayas_list', array());
+    // Auto-migrate check
+    if (!empty($wilayas) && is_string($wilayas[0])) {
+         cvsm_get_lists();
+         $wilayas = get_option('cvsm_wilayas_list', array());
+    }
+    
+    ?>
+    <div class="wrap">
+        <h1>Gestion des Wilayas</h1>
+        
+        <div style="display: flex; gap: 20px; align-items: flex-start; margin-top: 20px;">
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1; max-width: 400px;">
+                <h2>Ajouter une Wilaya</h2>
+                <form method="post" action="">
+                    <?php wp_nonce_field('cvsm_manage_locations'); ?>
+                    <input type="hidden" name="cvsm_action" value="add_wilaya">
+                    <p>
+                        <label>Nom de la Wilaya</label><br>
+                        <input type="text" name="new_wilaya" class="regular-text" required style="width: 100%;">
+                    </p>
+                    <p>
+                        <label>Slug (optionnel)</label><br>
+                        <input type="text" name="new_wilaya_slug" class="regular-text" style="width: 100%;">
+                    </p>
+                     <p class="description">Une page WordPress sera automatiquement créée.</p>
+                    <p>
+                        <input type="submit" class="button button-primary" value="Ajouter">
+                    </p>
+                </form>
+            </div>
+
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1;">
+                <h2>Liste des Wilayas (<?php echo count($wilayas); ?>)</h2>
+                <?php if (empty($wilayas)): ?>
+                    <p>Aucune wilaya configurée.</p>
+                <?php else: ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th>Nom</th>
+                                <th>Slug</th>
+                                <th>Page</th>
+                                <th style="width: 100px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($wilayas as $index => $w): ?>
+                            <tr>
+                                <?php if (is_array($w)): ?>
+                                    <td><?php echo esc_html($w['name']); ?></td>
+                                    <td><code><?php echo esc_html($w['slug']); ?></code></td>
+                                    <td>
+                                        <?php if (!empty($w['page_id']) && get_post($w['page_id'])): ?>
+                                            <a href="<?php echo get_permalink($w['page_id']); ?>" target="_blank">Voir la page <span class="dashicons dashicons-external"></span></a>
+                                        <?php else: ?>
+                                            <span style="color: red;">Page introuvable</span>
+                                        <?php endif; ?>
+                                    </td>
+                                <?php else: ?>
+                                    <!-- Fallback for legacy string data if migration failed -->
+                                    <td><?php echo esc_html($w); ?></td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                <?php endif; ?>
+                                
+                                <td>
+                                    <form method="post" action="" style="display:inline;">
+                                        <?php wp_nonce_field('cvsm_manage_locations'); ?>
+                                        <input type="hidden" name="cvsm_action" value="delete_wilaya">
+                                        <input type="hidden" name="delete_index" value="<?php echo $index; ?>">
+                                        <button type="submit" class="button button-link-delete" onclick="return confirm('Êtes-vous sûr ? La page associée sera supprimée.');">Supprimer</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+/**
+ * Manage Categories Page
+ */
+function cvsm_categories_page() {
+    // Handle Add
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'add_category' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_categories');
+        
+        $name = sanitize_text_field($_POST['new_category_name']);
+        $slug = sanitize_title($_POST['new_category_slug']);
+        
+        if (empty($slug)) {
+            $slug = sanitize_title($name);
+        }
+        
+        if (!empty($name) && !empty($slug)) {
+            $categories = get_option('cvsm_categories_list', array());
+            
+            // Check for duplicate slug
+            $exists = false;
+            foreach ($categories as $cat) {
+                if ($cat['slug'] === $slug) {
+                    $exists = true;
+                    break;
+                }
+            }
+            
+            if (!$exists) {
+                // Create Page
+                $page_id = wp_insert_post(array(
+                    'post_title'    => $name,
+                    'post_content'  => '[cvsm_accepted_list category="' . $slug . '"]',
+                    'post_status'   => 'publish',
+                    'post_type'     => 'page',
+                    'post_name'     => $slug
+                ));
+                
+                if ($page_id && !is_wp_error($page_id)) {
+                    $categories[] = array(
+                        'name' => $name,
+                        'slug' => $slug,
+                        'page_id' => $page_id
+                    );
+                    update_option('cvsm_categories_list', $categories);
+                    echo '<div class="notice notice-success"><p>Métier ajouté et page créée: <a href="' . get_permalink($page_id) . '" target="_blank">' . esc_html($name) . '</a></p></div>';
+                } else {
+                    echo '<div class="notice notice-error"><p>Erreur lors de la création de la page.</p></div>';
+                }
+            } else {
+                echo '<div class="notice notice-warning"><p>Un métier avec ce slug existe déjà.</p></div>';
+            }
+        }
+    }
+
+    // Handle Delete
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'delete_category' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_categories');
+        $delete_index = intval($_POST['delete_index']);
+        $categories = get_option('cvsm_categories_list', array());
+        
+        if (isset($categories[$delete_index])) {
+            $deleted = $categories[$delete_index];
+            
+            // Delete Page
+            if (!empty($deleted['page_id'])) {
+                wp_delete_post($deleted['page_id'], true);
+            }
+            
+            unset($categories[$delete_index]);
+            $categories = array_values($categories); // Re-index
+            update_option('cvsm_categories_list', $categories);
+            echo '<div class="notice notice-success"><p>Métier et page associée supprimés: ' . esc_html($deleted['name']) . '</p></div>';
+        }
+    }
+
+    $categories = get_option('cvsm_categories_list', array());
+    // Fallback if empty (should be handled by get_lists migration, but just in case)
+    if (empty($categories)) {
+        cvsm_get_lists(); // Trigger migration
+        $categories = get_option('cvsm_categories_list', array());
+    }
+    ?>
+    <div class="wrap">
+        <h1>Gestion des Métiers</h1>
+        
+        <div style="display: flex; gap: 20px; align-items: flex-start; margin-top: 20px;">
+            <!-- Add New Form -->
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1; max-width: 400px;">
+                <h2>Ajouter un Métier</h2>
+                <form method="post" action="">
+                    <?php wp_nonce_field('cvsm_manage_categories'); ?>
+                    <input type="hidden" name="cvsm_action" value="add_category">
+                    <p>
+                        <label>Nom du Métier</label><br>
+                        <input type="text" name="new_category_name" class="regular-text" placeholder="Ex: Informatique" required style="width: 100%;">
+                    </p>
+                    <p>
+                        <label>Slug (optionnel, auto-généré si vide)</label><br>
+                        <input type="text" name="new_category_slug" class="regular-text" placeholder="Ex: informatique" style="width: 100%;">
+                    </p>
+                    <p class="description">Une page WordPress sera automatiquement créée pour ce métier.</p>
+                    <p>
+                        <input type="submit" class="button button-primary" value="Ajouter">
+                    </p>
+                </form>
+            </div>
+
+            <!-- List -->
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1;">
+                <h2>Liste des Métiers (<?php echo count($categories); ?>)</h2>
+                <?php if (empty($categories)): ?>
+                    <p>Aucun métier configuré.</p>
+                <?php else: ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th>Nom</th>
+                                <th>Slug</th>
+                                <th>Page</th>
+                                <th style="width: 100px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($categories as $index => $cat): ?>
+                            <tr>
+                                <td><?php echo esc_html($cat['name']); ?></td>
+                                <td><code><?php echo esc_html($cat['slug']); ?></code></td>
+                                <td>
+                                    <?php if (!empty($cat['page_id']) && get_post($cat['page_id'])): ?>
+                                        <a href="<?php echo get_permalink($cat['page_id']); ?>" target="_blank">Voir la page <span class="dashicons dashicons-external"></span></a>
+                                    <?php else: ?>
+                                        <span style="color: red;">Page introuvable</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <form method="post" action="" style="display:inline;">
+                                        <?php wp_nonce_field('cvsm_manage_categories'); ?>
+                                        <input type="hidden" name="cvsm_action" value="delete_category">
+                                        <input type="hidden" name="delete_index" value="<?php echo $index; ?>">
+                                        <button type="submit" class="button button-link-delete" onclick="return confirm('Attention: Cela supprimera définitivement la page associée ! Êtes-vous sûr ?');">Supprimer</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    <?php
 }
 
 /**
@@ -1312,10 +2574,79 @@ function cvsm_shortcode_accepted_list($atts) {
     $lists = cvsm_get_lists();
     $domaines = $lists['domaines'];
     $wilayas = $lists['wilayas'];
-    $types = $lists['profile_types']; // Use hardcoded types instead of dynamic query
+    $types = $lists['profile_types']; // Now dynamic from Tags
+    
+    // Check for category filter
+    $category_slug = isset($atts['category']) ? sanitize_title($atts['category']) : '';
+    $tag_slug = isset($atts['tag']) ? sanitize_title($atts['tag']) : '';
+    $wilaya_slug = isset($atts['wilaya']) ? sanitize_title($atts['wilaya']) : '';
+    
+    $where_clause = "WHERE status = 'accepted'";
+    
+    if (!empty($category_slug)) {
+        // Resolve slug to Name
+        $categories = get_option('cvsm_categories_list', array());
+        $category_name = '';
+        foreach ($categories as $cat) {
+            if ($cat['slug'] === $category_slug) {
+                $category_name = $cat['name'];
+                break;
+            }
+        }
+        
+        if (!empty($category_name)) {
+            global $wpdb;
+            $where_clause .= $wpdb->prepare(" AND domaine = %s", $category_name);
+        }
+    }
+    
+    // Check for Tag filter (profile_type)
+    if (!empty($tag_slug)) {
+        $tags = get_option('cvsm_tags_list', array());
+        $tag_name = '';
+        foreach ($tags as $t) {
+            if ($t['slug'] === $tag_slug) {
+                $tag_name = $t['name'];
+                break;
+            }
+        }
+        
+        if (!empty($tag_name)) {
+            global $wpdb;
+            $where_clause .= $wpdb->prepare(" AND profile_type = %s", $tag_name);
+        }
+    }
+
+    // Check for Wilaya filter
+    if (!empty($wilaya_slug)) {
+        $wilayas = get_option('cvsm_wilayas_list', array());
+        $wilaya_name = '';
+        // Need to check structure (could be string or array during migration, but shortcode should preferably run after migration)
+        // If it's string array, we can't search by slug effectively unless slug==sanitize_title(name)
+        
+        foreach ($wilayas as $w) {
+            if (is_array($w)) {
+                if ($w['slug'] === $wilaya_slug) {
+                    $wilaya_name = $w['name'];
+                    break;
+                }
+            } else {
+                 // Fallback: check if slug matches sanitized name
+                 if (sanitize_title($w) === $wilaya_slug) {
+                     $wilaya_name = $w;
+                     break;
+                 }
+            }
+        }
+        
+        if (!empty($wilaya_name)) {
+            global $wpdb;
+            $where_clause .= $wpdb->prepare(" AND wilaya = %s", $wilaya_name);
+        }
+    }
     
     // 2. Query accepted submissions
-    $results = $wpdb->get_results("SELECT * FROM $table_name WHERE status = 'accepted' ORDER BY processed_at DESC");
+    $results = $wpdb->get_results("SELECT * FROM $table_name $where_clause ORDER BY processed_at DESC");
     
     ob_start();
     ?>
