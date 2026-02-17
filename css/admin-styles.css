@@ -501,31 +501,36 @@
     height: 14px;
 }
 
-.cvsm-btn-accept {
+.cvsm-btn-accept,
+.offre-service-btn-accept {
     background: var(--cvsm-success);
     border-color: var(--cvsm-success);
     color: #fff;
 }
 
-.cvsm-btn-accept:hover {
+.cvsm-btn-accept:hover,
+.offre-service-btn-accept:hover {
     background: #16a34a;
     border-color: #16a34a;
     transform: translateY(-1px);
 }
 
-.cvsm-btn-reject {
+.cvsm-btn-reject,
+.offre-service-btn-reject {
     background: var(--cvsm-white);
     border-color: var(--cvsm-border);
     color: var(--cvsm-text-muted);
 }
 
-.cvsm-btn-reject:hover {
+.cvsm-btn-reject:hover,
+.offre-service-btn-reject:hover {
     background: var(--cvsm-danger);
     border-color: var(--cvsm-danger);
     color: #fff;
 }
 
-.cvsm-btn-delete {
+.cvsm-btn-delete,
+.offre-service-btn-delete {
     background: transparent;
     border-color: transparent;
     color: var(--cvsm-text-muted);
@@ -533,7 +538,8 @@
     margin-left: 4px;
 }
 
-.cvsm-btn-delete:hover {
+.cvsm-btn-delete:hover,
+.offre-service-btn-delete:hover {
     background: #fee2e2;
     color: var(--cvsm-danger);
     border-color: #fee2e2;

@@ -34,6 +34,7 @@ function cvsm_log($message, $data = null) {
 function cvsm_activate() {
     cvsm_create_table();
     devis_create_table();
+    offre_service_create_table();
     
     $upload_dir = wp_upload_dir();
     $cv_upload_dir = $upload_dir['basedir'] . '/cv-submissions';
@@ -68,6 +69,33 @@ function cvsm_init() {
     if (!$devis_table_exists) {
         cvsm_log('Devis Table not found, creating...');
         devis_create_table();
+    }
+    
+    $offre_table_name = $wpdb->prefix . 'offre_service_submissions';
+    $offre_table_exists = $wpdb->get_var("SHOW TABLES LIKE '$offre_table_name'") === $offre_table_name;
+    
+    if (!$offre_table_exists) {
+        cvsm_log('Offre Service Table not found, creating...');
+        offre_service_create_table();
+    }
+    
+    // Migration: Add new columns to offre_service_submissions if they don't exist
+    if ($offre_table_exists) {
+        $offre_table_name = $wpdb->prefix . 'offre_service_submissions';
+        $columns = $wpdb->get_col("DESCRIBE $offre_table_name", 0);
+        
+        if (!in_array('sexe', $columns)) {
+            $wpdb->query("ALTER TABLE $offre_table_name ADD COLUMN sexe VARCHAR(50) NOT NULL DEFAULT '' AFTER offre_file");
+            cvsm_log('Added sexe column to offre_service_submissions');
+        }
+        if (!in_array('niveau_education', $columns)) {
+            $wpdb->query("ALTER TABLE $offre_table_name ADD COLUMN niveau_education VARCHAR(255) NOT NULL DEFAULT '' AFTER sexe");
+            cvsm_log('Added niveau_education column to offre_service_submissions');
+        }
+        if (!in_array('description_offre', $columns)) {
+            $wpdb->query("ALTER TABLE $offre_table_name ADD COLUMN description_offre TEXT DEFAULT '' AFTER niveau_education");
+            cvsm_log('Added description_offre column to offre_service_submissions');
+        }
     }
 }
 add_action('plugins_loaded', 'cvsm_init');
@@ -134,6 +162,41 @@ function devis_create_table() {
 }
 
 /**
+ * Create offre_service_submissions table for service offers
+ */
+function offre_service_create_table() {
+    global $wpdb;
+    
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    $charset_collate = $wpdb->get_charset_collate();
+    
+    $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+        id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+        full_name VARCHAR(255) NOT NULL DEFAULT '',
+        email VARCHAR(255) NOT NULL DEFAULT '',
+        phone VARCHAR(50) NOT NULL DEFAULT '',
+        wilaya VARCHAR(100) NOT NULL DEFAULT '',
+        domaine VARCHAR(100) NOT NULL DEFAULT '',
+        specialite VARCHAR(255) NOT NULL DEFAULT '',
+        experience VARCHAR(50) NOT NULL DEFAULT '',
+        offre_file VARCHAR(500) DEFAULT '',
+        sexe VARCHAR(50) NOT NULL DEFAULT '',
+        niveau_education VARCHAR(255) NOT NULL DEFAULT '',
+        description_offre TEXT DEFAULT '',
+        status VARCHAR(20) DEFAULT 'pending',
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        processed_at DATETIME NULL,
+        admin_notes TEXT,
+        PRIMARY KEY (id)
+    ) $charset_collate;";
+    
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
+    
+    cvsm_log('Offre Service table creation executed');
+}
+
+/**
  * Add admin menu
  */
 function cvsm_admin_menu() {
@@ -167,6 +230,16 @@ function cvsm_admin_menu() {
         'cvsm_devis_page'
     );
     
+    // Add Offre Service submenu page
+    add_submenu_page(
+        'cv-submissions',
+        'Offre Service',
+        'Offre Service',
+        'manage_options',
+        'cvsm-offre-service',
+        'cvsm_offre_service_page'
+    );
+    
     add_submenu_page(
         'cv-submissions',
         'Wilaya',
@@ -178,11 +251,20 @@ function cvsm_admin_menu() {
     
     add_submenu_page(
         'cv-submissions',
-        'Métier',
-        'Métier',
+        'Métier Offre d\'Emploi',
+        'Métier Offre d\'Emploi',
         'manage_options',
         'cvsm-categories',
         'cvsm_categories_page'
+    );
+    
+    add_submenu_page(
+        'cv-submissions',
+        'Métier Offre Service',
+        'Métier Offre Service',
+        'manage_options',
+        'cvsm-service-categories',
+        'cvsm_service_categories_page'
     );
     
     add_submenu_page(
@@ -203,7 +285,8 @@ function cvsm_admin_enqueue_scripts($hook) {
     // Load on both Emploi (toplevel) and Devis pages
     $allowed_hooks = array(
         'toplevel_page_cv-submissions',
-        'emploi-et-devis_page_cvsm-devis'
+        'emploi-et-devis_page_cvsm-devis',
+        'emploi-et-devis_page_cvsm-offre-service'
     );
     
     if (!in_array($hook, $allowed_hooks)) {
@@ -885,6 +968,364 @@ function cvsm_devis_page() {
 }
 
 /**
+ * Offre Service Dashboard Page - Identical styling to Emploi
+ */
+function cvsm_offre_service_page() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    
+    $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+    
+    if (!$table_exists) {
+        echo '<div class="notice notice-error"><p>La table de base de données n\'existe pas. <a href="' . admin_url('admin.php?page=cvsm-offre-service&action=create_table') . '">Cliquez ici pour la créer</a></p></div>';
+        return;
+    }
+    
+    // Handle Manual Add Submission
+    if (isset($_POST['action']) && $_POST['action'] === 'offre_service_manual_add' && current_user_can('manage_options')) {
+        check_admin_referer('offre_service_manual_add_nonce');
+        
+        $full_name = sanitize_text_field($_POST['full_name']);
+        $email = sanitize_email($_POST['email']);
+        $phone = sanitize_text_field($_POST['phone']);
+        $wilaya = sanitize_text_field($_POST['wilaya']);
+        $domaine = sanitize_text_field($_POST['domaine']);
+        $specialite = sanitize_text_field($_POST['specialite']);
+        $experience = sanitize_text_field($_POST['experience']);
+        $sexe = sanitize_text_field($_POST['sexe']);
+        $niveau_education = sanitize_text_field($_POST['niveau_education']);
+        $description_offre = sanitize_textarea_field($_POST['description_offre']);
+        $offre_file = '';
+        
+        // Handle File Upload
+        if (!empty($_FILES['offre_file']['name'])) {
+            $uploaded = $_FILES['offre_file'];
+            $upload_overrides = array('test_form' => false);
+            $movefile = wp_handle_upload($uploaded, $upload_overrides);
+            
+            if ($movefile && !isset($movefile['error'])) {
+                $offre_file = $movefile['url'];
+            } else {
+                echo '<div class="notice notice-error"><p>Erreur lors du téléchargement du fichier: ' . $movefile['error'] . '</p></div>';
+            }
+        }
+        
+        $result = $wpdb->insert(
+            $table_name,
+            array(
+                'full_name' => $full_name,
+                'email' => $email,
+                'phone' => $phone,
+                'wilaya' => $wilaya,
+                'domaine' => $domaine,
+                'specialite' => $specialite,
+                'experience' => $experience,
+                'offre_file' => $offre_file,
+                'sexe' => $sexe,
+                'niveau_education' => $niveau_education,
+                'description_offre' => $description_offre,
+                'status' => 'pending',
+                'submitted_at' => current_time('mysql')
+            ),
+            array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+        );
+        
+        if ($result) {
+            cvsm_trigger_cache_clear();
+            echo '<div class="notice notice-success"><p>Offre de service ajoutée avec succès!</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p>Erreur lors de l\'ajout: ' . $wpdb->last_error . '</p></div>';
+        }
+    }
+    
+    if (isset($_GET['action']) && $_GET['action'] === 'create_table') {
+        offre_service_create_table();
+        echo '<div class="notice notice-success"><p>Table créée avec succès!</p></div>';
+    }
+    
+    $total = $wpdb->get_var("SELECT COUNT(*) FROM $table_name") ?: 0;
+    $pending = $wpdb->get_var("SELECT COUNT(*) FROM $table_name WHERE status = 'pending'") ?: 0;
+    $accepted = $wpdb->get_var("SELECT COUNT(*) FROM $table_name WHERE status = 'accepted'") ?: 0;
+    $rejected = $wpdb->get_var("SELECT COUNT(*) FROM $table_name WHERE status = 'rejected'") ?: 0;
+    
+    $submissions = $wpdb->get_results("SELECT * FROM $table_name ORDER BY submitted_at DESC");
+    
+    ?>
+    <div class="wrap cvsm-dashboard">
+        <h1 class="cvsm-title">
+            <span class="dashicons dashicons-businessman"></span>
+            Gestion des Offres de Service
+            <button id="offre-service-open-modal" class="page-title-action">Ajouter une offre</button>
+        </h1>
+        
+        <!-- Statistics Cards -->
+        <div class="cvsm-stats-grid">
+            <div class="cvsm-stat-card total">
+                <div class="stat-icon"><span class="dashicons dashicons-groups"></span></div>
+                <div class="stat-content">
+                    <span class="stat-number"><?php echo esc_html($total); ?></span>
+                    <span class="stat-label">Total des offres</span>
+                </div>
+            </div>
+            <div class="cvsm-stat-card pending">
+                <div class="stat-icon"><span class="dashicons dashicons-clock"></span></div>
+                <div class="stat-content">
+                    <span class="stat-number"><?php echo esc_html($pending); ?></span>
+                    <span class="stat-label">En attente</span>
+                </div>
+            </div>
+            <div class="cvsm-stat-card accepted">
+                <div class="stat-icon"><span class="dashicons dashicons-yes-alt"></span></div>
+                <div class="stat-content">
+                    <span class="stat-number"><?php echo esc_html($accepted); ?></span>
+                    <span class="stat-label">Acceptées</span>
+                </div>
+            </div>
+            <div class="cvsm-stat-card rejected">
+                <div class="stat-icon"><span class="dashicons dashicons-dismiss"></span></div>
+                <div class="stat-content">
+                    <span class="stat-number"><?php echo esc_html($rejected); ?></span>
+                    <span class="stat-label">Rejetées</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Filter Tabs -->
+        <div class="cvsm-filter-tabs">
+            <button class="filter-tab active" data-filter="all" data-table="offre-service">Tous</button>
+            <button class="filter-tab" data-filter="pending" data-table="offre-service">En attente</button>
+            <button class="filter-tab" data-filter="accepted" data-table="offre-service">Acceptées</button>
+            <button class="filter-tab" data-filter="rejected" data-table="offre-service">Rejetées</button>
+        </div>
+        
+        <!-- Custom Search Bar -->
+        <div class="cvsm-controls-bar">
+            <div class="cvsm-controls-left">
+                <div class="alignleft actions bulkactions" style="margin-right: 15px; display: inline-flex; align-items: center; gap: 5px;">
+                    <select name="offre_service_bulk_action" id="offre-service-bulk-action-selector">
+                        <option value="-1">Actions groupées</option>
+                        <option value="accept">Accepter</option>
+                        <option value="delete">Supprimer</option>
+                    </select>
+                    <input type="button" id="offre-service-doaction" class="button action" value="Appliquer">
+                </div>
+                
+                <label>Afficher 
+                    <select id="offre-service-page-length">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                entrées</label>
+            </div>
+            <div class="cvsm-controls-right">
+                <div class="cvsm-search-box">
+                    <input type="text" id="offre-service-search-input" placeholder="Rechercher par nom, email, téléphone...">
+                </div>
+            </div>
+        </div>
+        
+        <!-- Submissions Table -->
+        <div class="cvsm-table-container">
+            <table id="offre-service-submissions-table" class="display" style="width:100%">
+                <thead>
+                    <tr>
+                        <th class="check-column"><input type="checkbox" id="offre-service-cb-select-all"></th>
+                        <th>#</th>
+                        <th>Nom et Prénom</th>
+                        <th>Email</th>
+                        <th>Téléphone</th>
+                        <th>Wilaya</th>
+                        <th>Domaine</th>
+                        <th>Spécialité</th>
+                        <th>Expérience</th>
+                        <th>Offre Service</th>
+                        <th>Sexe</th>
+                        <th>Niveau d'éducation</th>
+                        <th>Description</th>
+                        <th>Date</th>
+                        <th>Statut</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if ($submissions): foreach ($submissions as $sub): ?>
+                    <tr data-status="<?php echo esc_attr($sub->status); ?>" data-id="<?php echo esc_attr($sub->id); ?>">
+                        <th scope="row" class="check-column">
+                            <input type="checkbox" name="offre_service_post[]" value="<?php echo esc_attr($sub->id); ?>">
+                        </th>
+                        <td><?php echo esc_html($sub->id); ?></td>
+                        <td><strong><?php echo esc_html($sub->full_name); ?></strong></td>
+                        <td><a href="mailto:<?php echo esc_attr($sub->email); ?>"><?php echo esc_html($sub->email); ?></a></td>
+                        <td><a href="tel:<?php echo esc_attr($sub->phone); ?>"><?php echo esc_html($sub->phone); ?></a></td>
+                        <td><?php echo esc_html($sub->wilaya); ?></td>
+                        <td><?php echo esc_html($sub->domaine); ?></td>
+                        <td><?php echo esc_html($sub->specialite); ?></td>
+                        <td><?php echo esc_html($sub->experience); ?> ans</td>
+                        <td>
+                            <?php if (!empty($sub->offre_file)): ?>
+                                <a href="<?php echo esc_url($sub->offre_file); ?>" target="_blank" class="cv-download-btn">
+                                    <span class="dashicons dashicons-media-document"></span> Voir Offre
+                                </a>
+                            <?php else: ?>
+                                <span class="no-cv">Pas de fichier</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?php echo esc_html($sub->sexe); ?></td>
+                        <td><?php echo esc_html($sub->niveau_education); ?></td>
+                        <td><?php echo esc_html(wp_trim_words($sub->description_offre, 10, '...')); ?></td>
+                        <td><?php echo date_i18n('d/m/Y H:i', strtotime($sub->submitted_at)); ?></td>
+                        <td>
+                            <span class="status-badge status-<?php echo esc_attr($sub->status); ?>">
+                                <?php 
+                                $status_labels = array(
+                                    'pending' => 'En attente',
+                                    'accepted' => 'Acceptée',
+                                    'rejected' => 'Rejetée'
+                                );
+                                echo esc_html($status_labels[$sub->status] ?? $sub->status);
+                                ?>
+                            </span>
+                        </td>
+                        <td class="actions-cell">
+                            <?php if ($sub->status === 'pending'): ?>
+                                <button class="cvsm-btn offre-service-btn-accept" data-id="<?php echo esc_attr($sub->id); ?>">
+                                    <span class="dashicons dashicons-yes"></span> Accepter
+                                </button>
+                                <button class="cvsm-btn offre-service-btn-reject" data-id="<?php echo esc_attr($sub->id); ?>">
+                                    <span class="dashicons dashicons-no"></span> Rejeter
+                                </button>
+                            <?php else: ?>
+                                <span class="action-done">
+                                    <?php echo $sub->status === 'accepted' ? '✓ Traité' : '✗ Fermé'; ?>
+                                </span>
+                            <?php endif; ?>
+                            <button class="cvsm-btn offre-service-btn-delete" data-id="<?php echo esc_attr($sub->id); ?>" title="Supprimer définitivement">
+                                <span class="dashicons dashicons-trash"></span>
+                            </button>
+                        </td>
+                    </tr>
+                    <?php endforeach; endif; ?>
+                </tbody>
+            </table>
+        </div>
+        </div>
+        
+        <!-- Add Offre Service Modal -->
+        <?php $lists = cvsm_get_lists(); ?>
+        <div id="offre-service-modal" class="cvsm-modal" style="display:none; position:fixed; z-index:9999; left:0; top:0; width:100%; height:100%; overflow:auto; background-color:rgba(0,0,0,0.5);">
+            <div class="cvsm-modal-content" style="background-color:#fefefe; margin:5% auto; padding:20px; border:1px solid #888; width:50%; max-width:600px; border-radius:8px; box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:1px solid #eee; padding-bottom:10px;">
+                    <h2 style="margin:0;">Ajouter une offre de service</h2>
+                    <span id="offre-service-close-modal" style="color:#aaa; float:right; font-size:28px; font-weight:bold; cursor:pointer;">&times;</span>
+                </div>
+                
+                <form method="post" enctype="multipart/form-data" action="">
+                    <?php wp_nonce_field('offre_service_manual_add_nonce'); ?>
+                    <input type="hidden" name="action" value="offre_service_manual_add">
+                    
+                    <table class="form-table">
+                        <tr>
+                            <th scope="row"><label for="os_full_name">Nom et Prénom</label></th>
+                            <td><input name="full_name" type="text" id="os_full_name" class="regular-text" required></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_email">Email</label></th>
+                            <td><input name="email" type="email" id="os_email" class="regular-text" required></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_phone">Téléphone</label></th>
+                            <td><input name="phone" type="text" id="os_phone" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_wilaya">Wilaya</label></th>
+                            <td>
+                                <select name="wilaya" id="os_wilaya" class="regular-text">
+                                    <option value="">Sélectionner une wilaya</option>
+                                    <?php foreach ($lists['wilayas'] as $w): ?>
+                                        <option value="<?php echo esc_attr($w); ?>"><?php echo esc_html($w); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_domaine">Domaine</label></th>
+                            <td>
+                                <select name="domaine" id="os_domaine" class="regular-text">
+                                    <option value="">Sélectionner un domaine</option>
+                                    <?php foreach ($lists['domaines'] as $d): ?>
+                                        <option value="<?php echo esc_attr($d); ?>"><?php echo esc_html($d); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_specialite">Spécialité</label></th>
+                            <td><input name="specialite" type="text" id="os_specialite" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_experience">Expérience (Années)</label></th>
+                            <td><input name="experience" type="number" id="os_experience" class="regular-text" min="0" step="1"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_offre_file">Offre Service (PDF)</label></th>
+                            <td><input name="offre_file" type="file" id="os_offre_file" accept=".pdf,.doc,.docx"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_sexe">Sexe</label></th>
+                            <td>
+                                <select name="sexe" id="os_sexe" class="regular-text">
+                                    <option value="">Sélectionner</option>
+                                    <option value="Homme">Homme</option>
+                                    <option value="Femme">Femme</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_niveau_education">Niveau d'éducation</label></th>
+                            <td><input name="niveau_education" type="text" id="os_niveau_education" class="regular-text"></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="os_description_offre">Description de l'offre</label></th>
+                            <td><textarea name="description_offre" id="os_description_offre" class="regular-text" rows="4"></textarea></td>
+                        </tr>
+                    </table>
+                    
+                    <p class="submit">
+                        <input type="submit" name="submit" id="os_submit" class="button button-primary" value="Ajouter l'offre">
+                    </p>
+                </form>
+            </div>
+        </div>
+        
+        <script>
+        jQuery(document).ready(function($) {
+            var modal = $('#offre-service-modal');
+            var btn = $('#offre-service-open-modal');
+            var span = $('#offre-service-close-modal');
+            
+            btn.on('click', function(e) {
+                e.preventDefault();
+                modal.fadeIn();
+            });
+            
+            span.on('click', function() {
+                modal.fadeOut();
+            });
+            
+            $(window).on('click', function(event) {
+                if ($(event.target).is(modal)) {
+                    modal.fadeOut();
+                }
+            });
+        });
+        </script>
+    </div>
+    <?php
+}
+
+/**
  * AJAX handler for accepting a CV
  */
 function cvsm_accept_cv() {
@@ -1203,6 +1644,180 @@ add_action('wp_ajax_devis_bulk_action', 'devis_bulk_action');
 
 /**
  * ============================================
+ * OFFRE SERVICE AJAX HANDLERS
+ * ============================================
+ */
+
+/**
+ * AJAX handler for accepting an Offre Service
+ */
+function offre_service_accept() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $id = intval($_POST['id']);
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    
+    // Ensure processed_at column exists
+    $column_exists = $wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'processed_at'");
+    if (empty($column_exists)) {
+        $wpdb->query("ALTER TABLE $table_name ADD COLUMN processed_at DATETIME NULL");
+    }
+    
+    // Use direct query for reliability
+    $result = $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE $table_name SET status = 'accepted', processed_at = %s WHERE id = %d",
+            current_time('mysql'),
+            $id
+        )
+    );
+    
+    if ($result !== false && $result > 0) {
+        cvsm_trigger_cache_clear();
+        cvsm_log('Offre Service accepted', array('id' => $id));
+        wp_send_json_success(array(
+            'message' => 'Offre de service acceptée avec succès'
+        ));
+    } else {
+        $error = $wpdb->last_error;
+        cvsm_log('Offre Service accept failed', array('id' => $id, 'error' => $error, 'result' => $result));
+        wp_send_json_error('Erreur: ' . ($error ? $error : 'Aucune ligne mise à jour (ID: ' . $id . ')'));
+    }
+}
+add_action('wp_ajax_offre_service_accept', 'offre_service_accept');
+
+/**
+ * AJAX handler for rejecting an Offre Service
+ */
+function offre_service_reject() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $id = intval($_POST['id']);
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    
+    // Ensure processed_at column exists
+    $column_exists = $wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'processed_at'");
+    if (empty($column_exists)) {
+        $wpdb->query("ALTER TABLE $table_name ADD COLUMN processed_at DATETIME NULL");
+    }
+    
+    // Use direct query for reliability
+    $result = $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE $table_name SET status = 'rejected', processed_at = %s WHERE id = %d",
+            current_time('mysql'),
+            $id
+        )
+    );
+    
+    if ($result !== false && $result > 0) {
+        cvsm_trigger_cache_clear();
+        cvsm_log('Offre Service rejected', array('id' => $id));
+        wp_send_json_success(array('message' => 'Offre de service rejetée'));
+    } else {
+        $error = $wpdb->last_error;
+        cvsm_log('Offre Service reject failed', array('id' => $id, 'error' => $error, 'result' => $result));
+        wp_send_json_error('Erreur: ' . ($error ? $error : 'Aucune ligne mise à jour (ID: ' . $id . ')'));
+    }
+}
+add_action('wp_ajax_offre_service_reject', 'offre_service_reject');
+
+/**
+ * AJAX handler for deleting an Offre Service
+ */
+function offre_service_delete() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $id = intval($_POST['id']);
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    
+    $result = $wpdb->delete(
+        $table_name,
+        array('id' => $id),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        cvsm_trigger_cache_clear();
+        cvsm_log('Offre Service deleted', array('id' => $id));
+        wp_send_json_success(array('message' => 'Offre de service supprimée définitivement'));
+    } else {
+        wp_send_json_error('Erreur lors de la suppression');
+    }
+}
+add_action('wp_ajax_offre_service_delete', 'offre_service_delete');
+
+/**
+ * AJAX handler for Offre Service bulk actions
+ */
+function offre_service_bulk_action() {
+    check_ajax_referer('cvsm_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    $ids = isset($_POST['ids']) ? array_map('intval', $_POST['ids']) : array();
+    $action_type = isset($_POST['action_type']) ? sanitize_text_field($_POST['action_type']) : '';
+    
+    if (empty($ids) || empty($action_type)) {
+        wp_send_json_error('Paramètres manquants');
+    }
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    $count = 0;
+    
+    if ($action_type === 'accept') {
+        foreach ($ids as $id) {
+            $result = $wpdb->update(
+                $table_name,
+                array(
+                    'status' => 'accepted',
+                    'processed_at' => current_time('mysql')
+                ),
+                array('id' => $id),
+                array('%s', '%s'),
+                array('%d')
+            );
+            if ($result !== false) $count++;
+        }
+    } elseif ($action_type === 'delete') {
+        foreach ($ids as $id) {
+            $result = $wpdb->delete(
+                $table_name,
+                array('id' => $id),
+                array('%d')
+            );
+            if ($result !== false) $count++;
+        }
+    }
+    
+    cvsm_trigger_cache_clear();
+    wp_send_json_success(array('message' => "$count éléments traités avec succès"));
+}
+add_action('wp_ajax_offre_service_bulk_action', 'offre_service_bulk_action');
+
+/**
+ * ============================================
  * ELEMENTOR PRO FORM INTEGRATION (FIXED)
  * ============================================
  * Using multiple hooks at different priorities to ensure capture
@@ -1240,7 +1855,37 @@ function cvsm_capture_elementor_form($record, $handler) {
             $is_devis_form = true;
         }
         
+        // Detect if this is an Offre Service form
+        $is_offre_service_form = false;
+        // Check form name for "offre" keyword
+        if (stripos($form_name, 'offre') !== false) {
+            $is_offre_service_form = true;
+        }
+        // Also check field labels in raw_fields for "offre" keyword
+        if (!$is_offre_service_form && !empty($raw_fields)) {
+            foreach ($raw_fields as $field_id => $field_data) {
+                $field_title = isset($field_data['title']) ? $field_data['title'] : '';
+                if (stripos($field_title, 'offre') !== false) {
+                    $is_offre_service_form = true;
+                    break;
+                }
+            }
+        }
+        // Also check the referring page URL for "offre-service" or "offre_service"
+        $referer = isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : '';
+        if (!$is_offre_service_form && (stripos($referer, 'offre-service') !== false || stripos($referer, 'offre_service') !== false)) {
+            $is_offre_service_form = true;
+        }
+        // Check page title from form settings
+        if (!$is_offre_service_form) {
+            $page_url = $record->get_form_settings('form_post_url');
+            if (!empty($page_url) && stripos($page_url, 'offre') !== false) {
+                $is_offre_service_form = true;
+            }
+        }
+        
         cvsm_log('Is Devis Form: ' . ($is_devis_form ? 'Yes' : 'No'));
+        cvsm_log('Is Offre Service Form: ' . ($is_offre_service_form ? 'Yes' : 'No'));
         
         // Common fields
         $full_name = isset($fields['name']) ? $fields['name'] : '';
@@ -1342,6 +1987,58 @@ function cvsm_capture_elementor_form($record, $handler) {
                 cvsm_log('DEVIS INSERT FAILED! DB Error: ' . $wpdb->last_error);
             } else {
                 cvsm_log('DEVIS INSERT SUCCESS! New ID: ' . $wpdb->insert_id);
+            }
+            
+        } elseif ($is_offre_service_form) {
+            // ============================================
+            // OFFRE SERVICE FORM PROCESSING
+            // ============================================
+            $table_name = $wpdb->prefix . 'offre_service_submissions';
+            
+            // Ensure table exists
+            $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+            if (!$table_exists) {
+                cvsm_log('Offre Service Table not found, creating...');
+                offre_service_create_table();
+            }
+            
+            // Map Offre Service-specific fields
+            $wilaya = isset($fields['field_f2f6b29']) ? $fields['field_f2f6b29'] : '';
+            $domaine = isset($fields['field_4b4ee37']) ? $fields['field_4b4ee37'] : '';
+            $specialite = isset($fields['field_5a7fc87']) ? $fields['field_5a7fc87'] : '';
+            $experience = isset($fields['field_3b0b51f']) ? $fields['field_3b0b51f'] : '';
+            $sexe = isset($fields['field_a216c21']) ? $fields['field_a216c21'] : '';
+            $niveau_education = isset($fields['field_5a7fc87']) ? $fields['field_5a7fc87'] : '';
+            $description_offre = isset($fields['field_ee8b0f8']) ? $fields['field_ee8b0f8'] : '';
+            
+            $insert_data = array(
+                'full_name' => sanitize_text_field($full_name),
+                'email' => sanitize_email($email),
+                'phone' => sanitize_text_field($phone),
+                'wilaya' => sanitize_text_field($wilaya),
+                'domaine' => sanitize_text_field($domaine),
+                'specialite' => sanitize_text_field($specialite),
+                'experience' => sanitize_text_field($experience),
+                'offre_file' => is_string($file_url) ? esc_url_raw($file_url) : '',
+                'sexe' => sanitize_text_field($sexe),
+                'niveau_education' => sanitize_text_field($niveau_education),
+                'description_offre' => sanitize_textarea_field($description_offre),
+                'status' => 'pending',
+                'submitted_at' => current_time('mysql')
+            );
+            
+            cvsm_log('Inserting OFFRE SERVICE data', $insert_data);
+            
+            $result = $wpdb->insert(
+                $table_name,
+                $insert_data,
+                array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+            );
+            
+            if ($result === false) {
+                cvsm_log('OFFRE SERVICE INSERT FAILED! DB Error: ' . $wpdb->last_error);
+            } else {
+                cvsm_log('OFFRE SERVICE INSERT SUCCESS! New ID: ' . $wpdb->insert_id);
             }
             
         } else {
@@ -2563,6 +3260,279 @@ function cvsm_categories_page() {
 }
 
 /**
+ * Manage Service Categories Page (Métier Offre Service)
+ */
+function cvsm_service_categories_page() {
+    // Handle Add
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'add_service_category' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_service_categories');
+        
+        $name = sanitize_text_field($_POST['new_service_category_name']);
+        $slug = sanitize_title($_POST['new_service_category_slug']);
+        
+        if (empty($slug)) {
+            $slug = sanitize_title($name);
+        }
+        
+        if (!empty($name) && !empty($slug)) {
+            $categories = get_option('cvsm_service_categories_list', array());
+            
+            // Check for duplicate slug
+            $exists = false;
+            foreach ($categories as $cat) {
+                if ($cat['slug'] === $slug) {
+                    $exists = true;
+                    break;
+                }
+            }
+            
+            if (!$exists) {
+                // Create Page with offre_service_accepted_list shortcode
+                $page_id = wp_insert_post(array(
+                    'post_title'    => $name,
+                    'post_content'  => '[offre_service_accepted_list category="' . $slug . '"]',
+                    'post_status'   => 'publish',
+                    'post_type'     => 'page',
+                    'post_name'     => 'service-' . $slug
+                ));
+                
+                if ($page_id && !is_wp_error($page_id)) {
+                    $categories[] = array(
+                        'name' => $name,
+                        'slug' => $slug,
+                        'page_id' => $page_id
+                    );
+                    update_option('cvsm_service_categories_list', $categories);
+                    echo '<div class="notice notice-success"><p>Service ajouté et page créée: <a href="' . get_permalink($page_id) . '" target="_blank">' . esc_html($name) . '</a></p></div>';
+                } else {
+                    echo '<div class="notice notice-error"><p>Erreur lors de la création de la page.</p></div>';
+                }
+            } else {
+                echo '<div class="notice notice-warning"><p>Un service avec ce slug existe déjà.</p></div>';
+            }
+        }
+    }
+
+    // Handle Delete
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'delete_service_category' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_service_categories');
+        $delete_index = intval($_POST['delete_index']);
+        $categories = get_option('cvsm_service_categories_list', array());
+        
+        if (isset($categories[$delete_index])) {
+            $deleted = $categories[$delete_index];
+            
+            // Delete Page
+            if (!empty($deleted['page_id'])) {
+                wp_delete_post($deleted['page_id'], true);
+            }
+            
+            unset($categories[$delete_index]);
+            $categories = array_values($categories); // Re-index
+            update_option('cvsm_service_categories_list', $categories);
+            echo '<div class="notice notice-success"><p>Service et page associée supprimés: ' . esc_html($deleted['name']) . '</p></div>';
+        }
+    }
+
+    // Handle Import from existing domaines
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'import_service_category' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_service_categories');
+        
+        $name = sanitize_text_field($_POST['import_service_name']);
+        $slug = sanitize_title($name);
+        
+        if (!empty($name) && !empty($slug)) {
+            $categories = get_option('cvsm_service_categories_list', array());
+            
+            $exists = false;
+            foreach ($categories as $cat) {
+                if ($cat['slug'] === $slug) {
+                    $exists = true;
+                    break;
+                }
+            }
+            
+            if (!$exists) {
+                $page_id = wp_insert_post(array(
+                    'post_title'    => $name,
+                    'post_content'  => '[offre_service_accepted_list category="' . $slug . '"]',
+                    'post_status'   => 'publish',
+                    'post_type'     => 'page',
+                    'post_name'     => 'service-' . $slug
+                ));
+                
+                if ($page_id && !is_wp_error($page_id)) {
+                    $categories[] = array(
+                        'name' => $name,
+                        'slug' => $slug,
+                        'page_id' => $page_id
+                    );
+                    update_option('cvsm_service_categories_list', $categories);
+                    echo '<div class="notice notice-success"><p>Service "' . esc_html($name) . '" importé et page créée.</p></div>';
+                }
+            } else {
+                echo '<div class="notice notice-warning"><p>Ce service est déjà géré.</p></div>';
+            }
+        }
+    }
+
+    // Handle Import All
+    if (isset($_POST['cvsm_action']) && $_POST['cvsm_action'] === 'import_all_services' && current_user_can('manage_options')) {
+        check_admin_referer('cvsm_manage_service_categories');
+        
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'offre_service_submissions';
+        $domaines = $wpdb->get_col("SELECT DISTINCT domaine FROM $table_name WHERE domaine != '' ORDER BY domaine ASC");
+        $categories = get_option('cvsm_service_categories_list', array());
+        $managed_slugs = array_map(function($c) { return $c['slug']; }, $categories);
+        $imported = 0;
+        
+        foreach ($domaines as $domaine) {
+            $slug = sanitize_title($domaine);
+            if (!in_array($slug, $managed_slugs)) {
+                $page_id = wp_insert_post(array(
+                    'post_title'    => $domaine,
+                    'post_content'  => '[offre_service_accepted_list category="' . $slug . '"]',
+                    'post_status'   => 'publish',
+                    'post_type'     => 'page',
+                    'post_name'     => 'service-' . $slug
+                ));
+                if ($page_id && !is_wp_error($page_id)) {
+                    $categories[] = array('name' => $domaine, 'slug' => $slug, 'page_id' => $page_id);
+                    $managed_slugs[] = $slug;
+                    $imported++;
+                }
+            }
+        }
+        
+        if ($imported > 0) {
+            update_option('cvsm_service_categories_list', $categories);
+            echo '<div class="notice notice-success"><p>' . $imported . ' service(s) importé(s) avec succès.</p></div>';
+        } else {
+            echo '<div class="notice notice-info"><p>Tous les services sont déjà gérés.</p></div>';
+        }
+    }
+
+    $categories = get_option('cvsm_service_categories_list', array());
+    
+    // Get existing domaines from database
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    $existing_domaines = array();
+    $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+    if ($table_exists) {
+        $existing_domaines = $wpdb->get_col("SELECT DISTINCT domaine FROM $table_name WHERE domaine != '' ORDER BY domaine ASC");
+    }
+    
+    // Find unmanaged domaines (exist in DB but not yet as managed categories)
+    $managed_slugs = array_map(function($c) { return $c['slug']; }, $categories);
+    $unmanaged_domaines = array();
+    foreach ($existing_domaines as $domaine) {
+        $slug = sanitize_title($domaine);
+        if (!in_array($slug, $managed_slugs)) {
+            $unmanaged_domaines[] = $domaine;
+        }
+    }
+    ?>
+    <div class="wrap">
+        <h1>Gestion des Services (Métier Offre Service)</h1>
+        
+        <?php if (!empty($unmanaged_domaines)): ?>
+        <!-- Existing Services from Form/DB -->
+        <div style="background: #fff3cd; padding: 15px 20px; border: 1px solid #ffc107; border-radius: 4px; margin-top: 20px;">
+            <h2 style="margin-top: 0;">⚠️ Services existants non gérés (<?php echo count($unmanaged_domaines); ?>)</h2>
+            <p>Ces services existent dans les soumissions "Offre Service" mais n'ont pas encore de page associée :</p>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
+                <?php foreach ($unmanaged_domaines as $domaine): ?>
+                <form method="post" action="" style="display:inline;">
+                    <?php wp_nonce_field('cvsm_manage_service_categories'); ?>
+                    <input type="hidden" name="cvsm_action" value="import_service_category">
+                    <input type="hidden" name="import_service_name" value="<?php echo esc_attr($domaine); ?>">
+                    <button type="submit" class="button" style="background: #fff; border-color: #ffc107;">
+                        <span class="dashicons dashicons-plus-alt" style="vertical-align: middle;"></span> <?php echo esc_html($domaine); ?>
+                    </button>
+                </form>
+                <?php endforeach; ?>
+            </div>
+            <form method="post" action="" style="display:inline;">
+                <?php wp_nonce_field('cvsm_manage_service_categories'); ?>
+                <input type="hidden" name="cvsm_action" value="import_all_services">
+                <button type="submit" class="button button-primary" onclick="return confirm('Importer tous les services et créer les pages associées ?');">
+                    <span class="dashicons dashicons-download" style="vertical-align: middle;"></span> Importer tous les services (<?php echo count($unmanaged_domaines); ?>)
+                </button>
+            </form>
+        </div>
+        <?php endif; ?>
+        
+        <div style="display: flex; gap: 20px; align-items: flex-start; margin-top: 20px;">
+            <!-- Add New Form -->
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1; max-width: 400px;">
+                <h2>Ajouter un Service manuellement</h2>
+                <form method="post" action="">
+                    <?php wp_nonce_field('cvsm_manage_service_categories'); ?>
+                    <input type="hidden" name="cvsm_action" value="add_service_category">
+                    <p>
+                        <label>Nom du Service</label><br>
+                        <input type="text" name="new_service_category_name" class="regular-text" placeholder="Ex: Plomberie" required style="width: 100%;">
+                    </p>
+                    <p>
+                        <label>Slug (optionnel, auto-généré si vide)</label><br>
+                        <input type="text" name="new_service_category_slug" class="regular-text" placeholder="Ex: plomberie" style="width: 100%;">
+                    </p>
+                    <p class="description">Une page WordPress sera automatiquement créée pour ce service.</p>
+                    <p>
+                        <input type="submit" class="button button-primary" value="Ajouter">
+                    </p>
+                </form>
+            </div>
+
+            <!-- Managed List -->
+            <div style="background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 4px; flex: 1;">
+                <h2>Services gérés (<?php echo count($categories); ?>)</h2>
+                <?php if (empty($categories)): ?>
+                    <p>Aucun service configuré. Importez les services existants ci-dessus ou ajoutez-en manuellement.</p>
+                <?php else: ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th>Nom</th>
+                                <th>Slug</th>
+                                <th>Page</th>
+                                <th style="width: 100px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($categories as $index => $cat): ?>
+                            <tr>
+                                <td><?php echo esc_html($cat['name']); ?></td>
+                                <td><code><?php echo esc_html($cat['slug']); ?></code></td>
+                                <td>
+                                    <?php if (!empty($cat['page_id']) && get_post($cat['page_id'])): ?>
+                                        <a href="<?php echo get_permalink($cat['page_id']); ?>" target="_blank">Voir la page <span class="dashicons dashicons-external"></span></a>
+                                    <?php else: ?>
+                                        <span style="color: red;">Page introuvable</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <form method="post" action="" style="display:inline;">
+                                        <?php wp_nonce_field('cvsm_manage_service_categories'); ?>
+                                        <input type="hidden" name="cvsm_action" value="delete_service_category">
+                                        <input type="hidden" name="delete_index" value="<?php echo $index; ?>">
+                                        <button type="submit" class="button button-link-delete" onclick="return confirm('Attention: Cela supprimera définitivement la page associée ! Êtes-vous sûr ?');">Supprimer</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+/**
  * Frontend Shortcode: [cvsm_accepted_list]
  * Displays accepted candidates in a grid
  */
@@ -3035,3 +4005,494 @@ function cvsm_shortcode_accepted_list($atts) {
     return ob_get_clean();
 }
 add_shortcode('cvsm_accepted_list', 'cvsm_shortcode_accepted_list');
+
+/**
+ * Frontend Shortcode: [offre_service_accepted_list]
+ * Displays accepted Offre Service submissions in a grid (same pattern as cvsm_accepted_list)
+ */
+function offre_service_shortcode_accepted_list($atts) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'offre_service_submissions';
+    
+    // Check if table exists
+    $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
+    if (!$table_exists) {
+        return '<p>La table des offres de service n\'existe pas encore.</p>';
+    }
+    
+    // 1. Get Distinct Values for Filters 
+    // Wilayas: Get all 58 wilayas using the shared helper
+    $lists = cvsm_get_lists();
+    $wilayas = $lists['wilayas'];
+    
+    // Categories: Get all managed services from option
+    $os_categories = get_option('cvsm_service_categories_list', array());
+    if (!empty($os_categories) && is_array($os_categories)) {
+        // Handle migration case where it might be array of strings vs array of arrays
+        $first = reset($os_categories);
+        if (is_array($first) || is_object($first)) {
+             $domaines = array_column($os_categories, 'name');
+        } else {
+             $domaines = $os_categories;
+        }
+    } else {
+        $domaines = array();
+    }
+    sort($domaines);
+    
+    // Specialities: Still fetch from DB as there is no managed list
+    $specialites = $wpdb->get_col("SELECT DISTINCT specialite FROM $table_name WHERE specialite != '' ORDER BY specialite ASC");
+    
+    // Parse shortcode attributes
+    $category_slug = isset($atts['category']) ? sanitize_title($atts['category']) : '';
+    $wilaya_slug = isset($atts['wilaya']) ? sanitize_title($atts['wilaya']) : '';
+    
+    // Build WHERE clause
+    $where_clause = "WHERE status = 'accepted'";
+    
+    // Resolve category slug to domaine name
+    if (!empty($category_slug)) {
+        // Re-fetch option to be sure (already fetched above but let's assume valid scope)
+        $category_name = '';
+        foreach ($os_categories as $cat) {
+            if (is_array($cat) && isset($cat['slug']) && $cat['slug'] === $category_slug) {
+                $category_name = $cat['name'];
+                break;
+            }
+        }
+        // Fallback: try matching slug against sanitized category names from the list
+        if (empty($category_name)) {
+            foreach ($domaines as $d) {
+                if (sanitize_title($d) === $category_slug) {
+                    $category_name = $d;
+                    break;
+                }
+            }
+        }
+        if (!empty($category_name)) {
+            $where_clause .= $wpdb->prepare(" AND domaine = %s", $category_name);
+        }
+    }
+    
+    // Resolve wilaya slug
+    if (!empty($wilaya_slug)) {
+        $wilaya_name = '';
+        foreach ($wilayas as $w) {
+            if (sanitize_title($w) === $wilaya_slug) {
+                $wilaya_name = $w;
+                break;
+            }
+        }
+        if (!empty($wilaya_name)) {
+            $where_clause .= $wpdb->prepare(" AND wilaya = %s", $wilaya_name);
+        }
+    }
+    
+    // 2. Query accepted submissions
+    $results = $wpdb->get_results("SELECT * FROM $table_name $where_clause ORDER BY submitted_at DESC");
+    
+    ob_start();
+    ?>
+    <style>
+        /* Container for Filters - Offre Service */
+        .os-filters-container {
+            display: flex;
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            border: 1px solid #e2e8f0;
+            margin-bottom: 30px;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .os-filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .os-filter-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .os-select {
+            appearance: none;
+            background-color: #fff;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            padding: 10px 36px 10px 14px;
+            font-size: 0.95rem;
+            color: #0F172A;
+            width: 100%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+        }
+
+        .os-select:hover {
+            border-color: #94a3b8;
+        }
+
+        .os-select:focus {
+            outline: none;
+            border-color: #0F172A;
+            box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.1);
+        }
+        
+        /* Grid Styles - Offre Service */
+        .os-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 24px;
+            margin: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+        }
+        .os-card {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            animation: osFadeIn 0.4s ease-out;
+        }
+        
+        .os-card.hidden {
+            display: none;
+        }
+
+        @keyframes osFadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .os-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
+        }
+        .os-card-header {
+            background-color: #0F172A;
+            padding: 24px;
+            color: white;
+            position: relative;
+        }
+        .os-card-header h3 {
+            margin: 0;
+            color: white;
+            font-size: 1.4rem;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+        .os-badges {
+            margin-top: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .os-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .os-badge.domaine {
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+        }
+        .os-badge.specialite {
+            background: #3b82f6;
+            color: #fff;
+        }
+        .os-card-body {
+            padding: 24px;
+            flex-grow: 1;
+            color: #334155;
+        }
+        .os-info-group {
+            margin-bottom: 20px;
+        }
+        .os-info-group:last-child {
+            margin-bottom: 0;
+        }
+        .os-info-row {
+            margin-bottom: 10px;
+            display: flex;
+            align-items: flex-start;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+        .os-info-row:last-child {
+            margin-bottom: 0;
+        }
+        .os-label {
+            min-width: 110px;
+            font-weight: 600;
+            color: #64748b;
+            flex-shrink: 0;
+        }
+        .os-value {
+            color: #1e293b;
+            font-weight: 500;
+            word-break: break-word;
+        }
+        .os-value a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        .os-value a:hover {
+            text-decoration: underline;
+        }
+        .os-divider {
+            height: 1px;
+            background: #e2e8f0;
+            margin: 16px 0;
+        }
+        .os-card-footer {
+            padding: 16px 24px;
+            background: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .os-date {
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+        .os-btn-download {
+            display: inline-flex;
+            align-items: center;
+            background: #0F172A;
+            color: white !important;
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none !important;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .os-btn-download:hover {
+            background: #1e293b;
+        }
+        .os-empty {
+            text-align: center;
+            padding: 40px;
+            background: #f8fafc;
+            border-radius: 8px;
+            color: #64748b;
+            border: 1px dashed #cbd5e1;
+            grid-column: 1 / -1;
+        }
+        
+        /* Mobile adjustment */
+        @media (max-width: 768px) {
+            .os-filters-container {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+    </style>
+
+    <div class="os-wrapper">
+        <!-- Filter Bar -->
+        <div class="os-filters-container">
+            <div class="os-filter-group">
+                <label class="os-filter-label">Catégorie</label>
+                <select id="os-filter-domaine" class="os-select">
+                    <option value="">Toutes les catégories</option>
+                    <?php foreach ($domaines as $d): ?>
+                        <option value="<?php echo esc_attr($d); ?>"><?php echo esc_html($d); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            
+            <div class="os-filter-group">
+                <label class="os-filter-label">Wilaya</label>
+                <select id="os-filter-wilaya" class="os-select">
+                    <option value="">Toutes les wilayas</option>
+                    <?php foreach ($wilayas as $w): ?>
+                        <option value="<?php echo esc_attr($w); ?>"><?php echo esc_html($w); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div class="os-filter-group">
+                <label class="os-filter-label">Spécialité</label>
+                <select id="os-filter-specialite" class="os-select">
+                    <option value="">Toutes les spécialités</option>
+                    <?php foreach ($specialites as $s): ?>
+                        <option value="<?php echo esc_attr($s); ?>"><?php echo esc_html($s); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </div>
+
+        <div class="os-accepted-container">
+            <?php if ($results): ?>
+                <div class="os-grid" id="os-grid">
+                    <?php foreach ($results as $profile): ?>
+                        <div class="os-card" 
+                             data-domaine="<?php echo esc_attr($profile->domaine); ?>" 
+                             data-wilaya="<?php echo esc_attr($profile->wilaya); ?>"
+                             data-specialite="<?php echo esc_attr($profile->specialite); ?>">
+                             
+                            <div class="os-card-header">
+                                <h3><?php echo esc_html($profile->full_name); ?></h3>
+                                <div class="os-badges">
+                                    <span class="os-badge domaine"><?php echo esc_html($profile->domaine); ?></span>
+                                    <?php if (!empty($profile->specialite)): ?>
+                                        <span class="os-badge specialite"><?php echo esc_html($profile->specialite); ?></span>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <div class="os-card-body">
+                                <div class="os-info-group">
+                                    <?php if (!empty($profile->specialite)): ?>
+                                    <div class="os-info-row">
+                                        <span class="os-label">Spécialité:</span>
+                                        <span class="os-value"><?php echo esc_html($profile->specialite); ?></span>
+                                    </div>
+                                    <?php endif; ?>
+                                    <div class="os-info-row">
+                                        <span class="os-label">Expérience:</span>
+                                        <span class="os-value"><?php echo esc_html($profile->experience); ?> ans</span>
+                                    </div>
+                                    <?php if (!empty($profile->wilaya)): ?>
+                                    <div class="os-info-row">
+                                        <span class="os-label">Wilaya:</span>
+                                        <span class="os-value"><?php echo esc_html($profile->wilaya); ?></span>
+                                    </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($profile->sexe)): ?>
+                                    <div class="os-info-row">
+                                        <span class="os-label">Sexe:</span>
+                                        <span class="os-value"><?php echo esc_html($profile->sexe); ?></span>
+                                    </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($profile->niveau_education)): ?>
+                                    <div class="os-info-row">
+                                        <span class="os-label">Éducation:</span>
+                                        <span class="os-value"><?php echo esc_html($profile->niveau_education); ?></span>
+                                    </div>
+                                    <?php endif; ?>
+                                </div>
+                                
+                                <?php if (!empty($profile->description_offre)): ?>
+                                <div class="os-divider"></div>
+                                <div class="os-info-group">
+                                    <div class="os-info-row">
+                                        <span class="os-label">Description:</span>
+                                        <span class="os-value"><?php echo esc_html($profile->description_offre); ?></span>
+                                    </div>
+                                </div>
+                                <?php endif; ?>
+                                
+                                <div class="os-divider"></div>
+                                
+                                <div class="os-info-group">
+                                    <?php if (!empty($profile->email)): ?>
+                                    <div class="os-info-row">
+                                        <span class="os-label">Email:</span>
+                                        <span class="os-value"><a href="mailto:<?php echo esc_attr($profile->email); ?>"><?php echo esc_html($profile->email); ?></a></span>
+                                    </div>
+                                    <?php endif; ?>
+                                    
+                                    <?php if (!empty($profile->phone)): ?>
+                                    <div class="os-info-row">
+                                        <span class="os-label">Tél:</span>
+                                        <span class="os-value"><a href="tel:<?php echo esc_attr($profile->phone); ?>"><?php echo esc_html($profile->phone); ?></a></span>
+                                    </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <div class="os-card-footer">
+                                <span class="os-date">Soumis le <?php echo date_i18n('d/m/Y', strtotime($profile->submitted_at)); ?></span>
+                                <?php if (!empty($profile->offre_file)): ?>
+                                    <a href="<?php echo esc_url($profile->offre_file); ?>" target="_blank" class="os-btn-download">
+                                        Voir Offre →
+                                    </a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                    <div id="os-no-results" class="os-empty" style="display: none;">
+                        <p>Aucun résultat ne correspond à vos critères.</p>
+                    </div>
+                </div>
+            <?php else: ?>
+                <div class="os-empty">
+                    <p>Aucune offre de service acceptée pour le moment.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Elements
+        const osFilterDomaine = document.getElementById('os-filter-domaine');
+        const osFilterWilaya = document.getElementById('os-filter-wilaya');
+        const osFilterSpecialite = document.getElementById('os-filter-specialite');
+        const osCards = document.querySelectorAll('.os-card');
+        const osNoResultsMsg = document.getElementById('os-no-results');
+
+        if (!osFilterDomaine || !osCards.length) return;
+
+        function osFilterCards() {
+            const valDomaine = osFilterDomaine.value.toLowerCase();
+            const valWilaya = osFilterWilaya.value.toLowerCase();
+            const valSpecialite = osFilterSpecialite ? osFilterSpecialite.value.toLowerCase() : '';
+            let visibleCount = 0;
+
+            osCards.forEach(card => {
+                const cardDomaine = (card.getAttribute('data-domaine') || '').toLowerCase();
+                const cardWilaya = (card.getAttribute('data-wilaya') || '').toLowerCase();
+                const cardSpecialite = (card.getAttribute('data-specialite') || '').toLowerCase();
+
+                let matchDomaine = !valDomaine || cardDomaine === valDomaine;
+                let matchWilaya = !valWilaya || cardWilaya === valWilaya;
+                let matchSpecialite = !valSpecialite || cardSpecialite === valSpecialite;
+
+                if (matchDomaine && matchWilaya && matchSpecialite) {
+                    card.classList.remove('hidden');
+                    visibleCount++;
+                } else {
+                    card.classList.add('hidden');
+                }
+            });
+
+            // Show/Hide "No Results" message
+            if (visibleCount === 0) {
+                if (osNoResultsMsg) osNoResultsMsg.style.display = 'block';
+            } else {
+                if (osNoResultsMsg) osNoResultsMsg.style.display = 'none';
+            }
+        }
+
+        // Event Listeners
+        osFilterDomaine.addEventListener('change', osFilterCards);
+        osFilterWilaya.addEventListener('change', osFilterCards);
+        if (osFilterSpecialite) osFilterSpecialite.addEventListener('change', osFilterCards);
+    });
+    </script>
+    <?php
+    return ob_get_clean();
+}
+add_shortcode('offre_service_accepted_list', 'offre_service_shortcode_accepted_list');

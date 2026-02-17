@@ -6,60 +6,62 @@
     $(document).ready(function() {
         console.log('CVSM Admin Scripts Loaded'); // Debug: verify script is running
         
-        // DataTable initialization
-        table = $('#cv-submissions-table').DataTable({
-            order: [[11, 'desc']], // Adjusted index due to new column
-            pageLength: 25,
-            dom: 'rt<"cvsm-table-bottom"<"cvsm-info"i><"cvsm-paging"p>>',
-            language: {
-                info: "Affichage de _START_ à _END_ sur _TOTAL_ entrées",
-                infoEmpty: "Aucune entrée à afficher",
-                infoFiltered: "(filtré de _MAX_ entrées au total)",
-                paginate: {
-                    first: "Premier",
-                    last: "Dernier",
-                    next: "Suivant",
-                    previous: "Précédent"
+        // DataTable initialization (only if CV table exists on this page)
+        if ($('#cv-submissions-table').length) {
+            table = $('#cv-submissions-table').DataTable({
+                order: [[11, 'desc']], // Adjusted index due to new column
+                pageLength: 25,
+                dom: 'rt<"cvsm-table-bottom"<"cvsm-info"i><"cvsm-paging"p>>',
+                language: {
+                    info: "Affichage de _START_ à _END_ sur _TOTAL_ entrées",
+                    infoEmpty: "Aucune entrée à afficher",
+                    infoFiltered: "(filtré de _MAX_ entrées au total)",
+                    paginate: {
+                        first: "Premier",
+                        last: "Dernier",
+                        next: "Suivant",
+                        previous: "Précédent"
+                    },
+                    zeroRecords: "Aucun CV trouvé",
+                    emptyTable: "Aucun CV soumis pour le moment"
                 },
-                zeroRecords: "Aucun CV trouvé",
-                emptyTable: "Aucun CV soumis pour le moment"
-            },
-            columnDefs: [
-                { orderable: false, targets: [0, 9, 13] }, // Disable sorting on checkbox, CV link, actions
-                { searchable: false, targets: [0, 9, 13] }
-            ]
-        });
+                columnDefs: [
+                    { orderable: false, targets: [0, 9, 13] }, // Disable sorting on checkbox, CV link, actions
+                    { searchable: false, targets: [0, 9, 13] }
+                ]
+            });
 
-        // Search input handler
-        $('#cvsm-search-input').on('keyup', function() {
-            table.search(this.value).draw();
-        });
+            // Search input handler
+            $('#cvsm-search-input').on('keyup', function() {
+                table.search(this.value).draw();
+            });
 
-        // Page length handler
-        $('#cvsm-page-length').on('change', function() {
-            table.page.len(parseInt(this.value)).draw();
-        });
+            // Page length handler
+            $('#cvsm-page-length').on('change', function() {
+                table.page.len(parseInt(this.value)).draw();
+            });
 
-        // Filter tabs handler
-        $('.filter-tab').on('click', function() {
-            var filter = $(this).data('filter');
-            
-            // Update active tab
-            $('.filter-tab').removeClass('active');
-            $(this).addClass('active');
-            
-            // Apply filter
-            if (filter === 'all') {
-                table.column(11).search('').draw();
-            } else {
-                var statusMap = {
-                    'pending': 'En attente',
-                    'accepted': 'Accepté',
-                    'rejected': 'Rejeté'
-                };
-                table.column(11).search(statusMap[filter] || filter).draw();
-            }
-        });
+            // Filter tabs handler
+            $('.filter-tab').on('click', function() {
+                var filter = $(this).data('filter');
+                
+                // Update active tab
+                $('.filter-tab').removeClass('active');
+                $(this).addClass('active');
+                
+                // Apply filter
+                if (filter === 'all') {
+                    table.column(11).search('').draw();
+                } else {
+                    var statusMap = {
+                        'pending': 'En attente',
+                        'accepted': 'Accepté',
+                        'rejected': 'Rejeté'
+                    };
+                    table.column(11).search(statusMap[filter] || filter).draw();
+                }
+            });
+        }
     });
 
     // =============================================
@@ -458,6 +460,290 @@
                     row.fadeOut(300, function() {
                         if (typeof devisTable !== 'undefined' && devisTable) {
                             devisTable.row(row).remove().draw(false);
+                        }
+                        updateStats();
+                    });
+                } else {
+                    showToast('Erreur: ' + response.data, 'error');
+                    btn.prop('disabled', false).html(originalContent);
+                }
+            },
+            error: function() {
+                showToast('Erreur de connexion', 'error');
+                btn.prop('disabled', false).html(originalContent);
+            }
+        });
+    });
+
+    // =============================================
+    // OFFRE SERVICE TABLE HANDLERS
+    // =============================================
+
+    var offreServiceTable;
+
+    $(document).ready(function() {
+        // Offre Service DataTable initialization (only if table exists)
+        if ($('#offre-service-submissions-table').length) {
+            offreServiceTable = $('#offre-service-submissions-table').DataTable({
+                order: [[13, 'desc']], // Order by date column (shifted +3 for new columns)
+                pageLength: 25,
+                dom: 'rtip',
+                language: {
+                    url: '//cdn.datatables.net/plug-ins/1.13.7/i18n/fr-FR.json'
+                },
+                columnDefs: [
+                    { orderable: false, targets: [0, 15] }
+                ]
+            });
+
+            // Offre Service Search input handler
+            $('#offre-service-search-input').on('keyup', function() {
+                offreServiceTable.search(this.value).draw();
+            });
+
+            // Offre Service Page length handler
+            $('#offre-service-page-length').on('change', function() {
+                offreServiceTable.page.len(parseInt(this.value)).draw();
+            });
+        }
+    });
+
+    // Offre Service Filter tabs handler
+    $(document).on('click', '.filter-tab[data-table="offre-service"]', function() {
+        var filter = $(this).data('filter');
+        
+        // Update active tab
+        $('.filter-tab[data-table="offre-service"]').removeClass('active');
+        $(this).addClass('active');
+        
+        if (typeof offreServiceTable !== 'undefined' && offreServiceTable) {
+            if (filter === 'all') {
+                offreServiceTable.column(14).search('').draw();
+            } else {
+                var statusMap = {
+                    'pending': 'En attente',
+                    'accepted': 'Acceptée',
+                    'rejected': 'Rejetée'
+                };
+                offreServiceTable.column(14).search(statusMap[filter] || filter).draw();
+            }
+        }
+    });
+
+    // Offre Service Select All Handler
+    $(document).on('click', '#offre-service-cb-select-all', function() {
+        var checked = this.checked;
+        $('input[name="offre_service_post[]"]').each(function() {
+            this.checked = checked;
+        });
+    });
+
+    // Offre Service Bulk Action Handler
+    $(document).on('click', '#offre-service-doaction', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('Offre Service Bulk action button clicked');
+        
+        var action = $('#offre-service-bulk-action-selector').val();
+        console.log('Selected action:', action);
+        
+        if (action === '-1') {
+            alert('Veuillez sélectionner une action.');
+            return;
+        }
+        
+        var selected = [];
+        $('input[name="offre_service_post[]"]:checked').each(function() {
+            selected.push($(this).val());
+        });
+        console.log('Selected IDs:', selected);
+        
+        if (selected.length === 0) {
+            alert('Veuillez sélectionner au moins un élément.');
+            return;
+        }
+        
+        if (!confirm('Êtes-vous sûr de vouloir appliquer cette action sur ' + selected.length + ' éléments ?')) {
+            return;
+        }
+        
+        // Show processing state
+        var btn = $(this);
+        var originalText = btn.val();
+        btn.prop('disabled', true).val('Traitement...');
+        
+        $.ajax({
+            url: cvsmAjax.ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'offre_service_bulk_action',
+                ids: selected,
+                action_type: action,
+                nonce: cvsmAjax.nonce
+            },
+            success: function(response) {
+                console.log('AJAX Response:', response);
+                if (response.success) {
+                    showToast(response.data.message, 'success');
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1000);
+                } else {
+                    showToast('Erreur: ' + response.data, 'error');
+                    btn.prop('disabled', false).val(originalText);
+                }
+            },
+            error: function(xhr, status, error) {
+                console.error('AJAX Error:', error);
+                console.log('Response:', xhr.responseText);
+                showToast('Erreur de connexion', 'error');
+                btn.prop('disabled', false).val(originalText);
+            }
+        });
+    });
+
+    // Offre Service Accept button handler
+    $(document).on('click', '.offre-service-btn-accept', function(e) {
+        e.preventDefault();
+        
+        var btn = $(this);
+        var id = btn.data('id');
+        var row = btn.closest('tr');
+        
+        if (!confirm('Accepter cette offre de service ?')) {
+            return;
+        }
+        
+        // Show loading state
+        var originalContent = btn.html();
+        btn.prop('disabled', true).html('<span class="cvsm-loading"></span>');
+        
+        $.ajax({
+            url: cvsmAjax.ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'offre_service_accept',
+                id: id,
+                nonce: cvsmAjax.nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    showToast('Offre de service acceptée avec succès', 'success');
+                    
+                    // Update the row
+                    row.attr('data-status', 'accepted');
+                    row.find('.status-badge')
+                        .removeClass('status-pending')
+                        .addClass('status-accepted')
+                        .text('Acceptée');
+                    
+                    // Replace action buttons
+                    row.find('.actions-cell').html(
+                        '<span class="action-done">✓ Traité</span>' +
+                        '<button class="cvsm-btn cvsm-btn-delete offre-service-btn-delete" data-id="' + id + '" title="Supprimer définitivement">' +
+                        '<span class="dashicons dashicons-trash"></span></button>'
+                    );
+                    
+                    updateStats();
+                } else {
+                    showToast('Erreur: ' + response.data, 'error');
+                    btn.prop('disabled', false).html(originalContent);
+                }
+            },
+            error: function() {
+                showToast('Erreur de connexion', 'error');
+                btn.prop('disabled', false).html(originalContent);
+            }
+        });
+    });
+
+    // Offre Service Reject button handler
+    $(document).on('click', '.offre-service-btn-reject', function(e) {
+        e.preventDefault();
+        
+        var btn = $(this);
+        var id = btn.data('id');
+        var row = btn.closest('tr');
+        
+        if (!confirm('Rejeter cette offre de service ?')) {
+            return;
+        }
+        
+        // Show loading state
+        var originalContent = btn.html();
+        btn.prop('disabled', true).html('<span class="cvsm-loading"></span>');
+        
+        $.ajax({
+            url: cvsmAjax.ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'offre_service_reject',
+                id: id,
+                nonce: cvsmAjax.nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    showToast('Offre de service rejetée', 'success');
+                    
+                    // Update the row
+                    row.attr('data-status', 'rejected');
+                    row.find('.status-badge')
+                        .removeClass('status-pending')
+                        .addClass('status-rejected')
+                        .text('Rejetée');
+                    
+                    // Replace action buttons
+                    row.find('.actions-cell').html(
+                        '<span class="action-done">✗ Fermé</span>' +
+                        '<button class="cvsm-btn cvsm-btn-delete offre-service-btn-delete" data-id="' + id + '" title="Supprimer définitivement">' +
+                        '<span class="dashicons dashicons-trash"></span></button>'
+                    );
+                    
+                    updateStats();
+                } else {
+                    showToast('Erreur: ' + response.data, 'error');
+                    btn.prop('disabled', false).html(originalContent);
+                }
+            },
+            error: function() {
+                showToast('Erreur de connexion', 'error');
+                btn.prop('disabled', false).html(originalContent);
+            }
+        });
+    });
+
+    // Offre Service Delete button handler
+    $(document).on('click', '.offre-service-btn-delete', function(e) {
+        e.preventDefault();
+        
+        var btn = $(this);
+        var id = btn.data('id');
+        var row = btn.closest('tr');
+        
+        if (!confirm('ATTENTION: Êtes-vous sûr de vouloir supprimer cette offre de service définitivement ? Cette action est irréversible.')) {
+            return;
+        }
+        
+        // Show loading state
+        var originalContent = btn.html();
+        btn.prop('disabled', true).html('<span class="cvsm-loading"></span>');
+        
+        $.ajax({
+            url: cvsmAjax.ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'offre_service_delete',
+                id: id,
+                nonce: cvsmAjax.nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    showToast('Offre de service supprimée avec succès', 'success');
+                    
+                    // Remove row from DataTable with animation
+                    row.fadeOut(300, function() {
+                        if (typeof offreServiceTable !== 'undefined' && offreServiceTable) {
+                            offreServiceTable.row(row).remove().draw(false);
                         }
                         updateStats();
                     });
